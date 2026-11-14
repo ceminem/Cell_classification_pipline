@@ -690,6 +690,13 @@ threshold + CV cap as really run). It reports accuracy, balanced accuracy
 The rule's thresholds were fitted on these same labels, so the comparison gives
 the rule a small home advantage. A CNN that still wins has earned it.
 
+**Which mask belongs to which labels.** The curator names its file after the
+mask it opened: `<base>_curated.csv` was made on `<base>_cp_masks.tif`, whose
+measurements are `<base>_results.csv`. Training uses exactly this link first,
+so labels stay attached to the right mask even when a later run (e.g. with
+plate-layout names) left a second mask in the folder. Only label files that
+do not follow this naming fall back to searching by well.
+
 **Safety check.** Labels point at Cellpose label ids. If a field was
 re-segmented after labelling (`--force`, or a renamed base after adding a
 plate layout), the same id now marks a different cell. When a results file is
@@ -698,11 +705,22 @@ if more than 10 % differ by more than 2 % the field is **refused**.
 
 ### 9.7 Using it
 
+**From the GUI (easiest):** the **CNN** tab does all of this with buttons —
+*Open curation tool*, *Train model*, *Classify ticked samples*, *Open training
+report*. It runs everything in the same Python environment the window was
+started in, which `Cargo Analysis.bat` chooses for its working GPU; the top of
+the tab shows the device that will be used. Step-by-step: `GETTING_STARTED.md`.
+
+**From the command line:**
+
 ```
 # 1. train (needs the *_curated.csv files from the curator)
 python -m cargo_cnn.train --data "D:\...\8_cond_pre_glucose"
 
-#    if results were written to a separate --output folder, list the fields explicitly:
+#    if results were written to a separate --output folder, also give that folder:
+python -m cargo_cnn.train --data "D:\...\8_cond_pre_glucose" --results "D:\...\analysis_out"
+
+#    or list every field explicitly:
 python -m cargo_cnn.train --pairs fields.csv
 #    fields.csv (semicolons):
 #    curated;fluorescence;mask;results
@@ -890,7 +908,11 @@ entry in `CHANGELOG.md`, and a git **tag** with the same number.
 
 ### 12.2 One-time setup on the lab PC
 
-Install *Git for Windows* (git-scm.com) or *GitHub Desktop*. Then:
+The click-only way, with **GitHub Desktop**, is in `GETTING_STARTED.md`. The
+program finds GitHub Desktop's built-in git by itself, so run records get the
+commit id and the *Get latest version from GitHub* button (Setup check tab)
+works without installing anything else. With *Git for Windows* the same works
+from a terminal:
 
 ```
 cd C:\Users\cemin\Documents\Molbio\Master\Projektlabor\Pharma\Python
@@ -964,13 +986,13 @@ git push --tags
 ```
 
 On GitHub a tag can be turned into a *Release*, where a trained `model.pt` used
-for a figure can be attached (model files are not committed; they are binary
-and change with every training run).
+for a figure can be attached. The `models/` folder itself is not committed:
+weights are binary, and the reports contain per-cell data.
 
 ### 12.7 What never goes into git
 
-Raw images, masks, results CSVs, curated labels, run records, trained weights,
-and the GUI's local settings files — all listed in `.gitignore`. Images are
+Raw images, masks, results CSVs, curated labels, run records, the `models/`
+folder, and the GUI's local settings files — all listed in `.gitignore`. Images are
 hundreds of MB; GitHub rejects files > 100 MB and the repository would become
 unusable. Data stays on the lab drive; the run record links data and code.
 
@@ -1040,7 +1062,7 @@ unusable. Data stays on the lab drive; the run record links data and code.
 | file | role |
 |---|---|
 | `Cargo Analysis.bat` | Windows launcher: finds conda, picks the best (GPU) environment, starts the GUI |
-| `cargo_gui.py` | the window: Run, Sample names, Settings, Figures, Setup check |
+| `cargo_gui.py` | the window: Run, Sample names, Settings, Figures, CNN, Setup check (incl. update button) |
 | `run_cargo_pipeline.py` | orchestrator: channel search, brightfield prep, Cellpose, measurement, batch summary, run record; CLI |
 | `cargo_measure.py` | per-cell measurement, classification rule, Otsu, CSV and overlay writing |
 | `cargo_plot.py` | figures and statistics |
@@ -1056,6 +1078,7 @@ unusable. Data stays on the lab drive; the run record links data and code.
 | `tests/make_synthetic.py` | test fields with a known answer |
 | `config/gui_config.example.json` | example of the settings the GUI passes to the pipeline |
 | `CHANGELOG.md` | changes in plain language |
+| `GETTING_STARTED.md` | click-by-click setup, CNN workflow, updates, troubleshooting |
 | `DOCUMENTATION.md` | this file |
 
 ---

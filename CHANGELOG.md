@@ -9,6 +9,15 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- **CNN tab in the GUI**: open the curation tool, train, classify, open the
+  report, with the compute device shown. Runs in the environment the `.bat`
+  picked, so the GPU is used without activating anything.
+- **Update button** (Setup check tab): `git pull` with plain-language results;
+  finds GitHub Desktop's built-in git when git is not on the PATH.
+- `GETTING_STARTED.md`: click-by-click guide.
+- Training finds results in a separate *Save results to* folder (`--results`),
+  and attaches labels to the exact mask they were made on (`<base>_curated.csv`
+  ↔ `<base>_cp_masks.tif`).
 - **Git repository.** The working copy was imported unchanged and tagged `v3.1`;
   every later change is a separate commit.
 - **CNN classifier** (`cargo_cnn/`, version 1.0, optional). Learns released /

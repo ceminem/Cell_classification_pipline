@@ -31,6 +31,9 @@ python -m cargo_cnn.predict --model models\cnn_<date>\model.pt --parent "D:\data
 
 ## Read next
 
+* **[GETTING_STARTED.md](GETTING_STARTED.md)**: click-by-click setup with GitHub
+  Desktop, the CNN workflow in the GUI, updates. **Start here.**
+
 * **[DOCUMENTATION.md](DOCUMENTATION.md)**: what is measured and why, every
   formula, the history, the CNN, settings, and how to use git with this project.
 * **[CHANGELOG.md](CHANGELOG.md)**: what changed, when.

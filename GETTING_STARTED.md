@@ -1,0 +1,160 @@
+# Getting started — no command line needed
+
+Everything below is clicking. Your existing conda environment (`rocm312`, with
+Cellpose and the GPU) is used as it is; you never activate it by hand.
+
+---
+
+## Part 1 — Put the program on your PC (once, ~10 minutes)
+
+1. **Install GitHub Desktop**: <https://desktop.github.com> → install → sign in
+   with your GitHub account (`ceminem`).
+2. **Clone the repository**: *File → Clone repository… → URL* tab
+   - URL: `https://github.com/ceminem/Cell_classification_pipline`
+   - Local path: e.g. `C:\Users\cemin\Documents\Molbio\Cell_classification_pipline`
+   - *Clone*.
+3. **Open the folder**: *Repository → Show in Explorer*.
+4. **Desktop shortcut** (optional): right-click `Cargo Analysis.bat` →
+   *Send to → Desktop (create shortcut)*.
+5. **Keep your old settings** (optional): copy `cargo_gui_settings.json` from
+   your old script folder into this new folder. It remembers your data folders.
+6. **Mark the starting version** (once): in GitHub Desktop open *History*,
+   right-click the **oldest** commit (*Import cargo-release pipeline…*) →
+   *Create Tag…* → `v3.1` → *Create* → then *Push origin* (top bar).
+
+From now on, **only use this folder**. Delete or rename the old script folder
+so an older copy of a file can never be started by accident.
+
+---
+
+## Part 2 — Start the program
+
+Double-click **`Cargo Analysis.bat`** (or its desktop shortcut).
+
+It finds conda, tests every environment, and starts the program in the one
+with a working GPU. The black window shows which:
+
+```
+ Environment : rocm312
+ Compute     : AMD Radeon RX 7800 XT
+```
+
+Everything started from the program — Cellpose, the measurement, the curation
+tool, CNN training and CNN classification — then runs in that environment, on
+the GPU. Nothing extra to install: the CNN uses the PyTorch that Cellpose
+already brought.
+
+First time: open the **Setup check** tab → *Run setup check* → all green.
+
+---
+
+## Part 3 — Normal analysis (as before)
+
+**Run** tab → *Browse…* the parent folder (the one holding A1, A2, …) → tick
+samples → *Run analysis*.
+
+---
+
+## Part 4 — The CNN, step by step (CNN tab)
+
+The line at the top must say **Compute device: GPU – AMD Radeon RX 7800 XT
+(AMD ROCm)**. If it says CPU, the program was not started with the `.bat`.
+
+### Step 1 — Label cells
+
+*Open curation tool…* → choose a **sample** folder (e.g. `…\8_cond_pre_glucose\A1`)
+that has already been analysed. In the curation window:
+
+| key | does |
+|---|---|
+| **B** | blind mode on/off — **always label in blind mode** |
+| **R** | cell under the mouse = released |
+| **N** | = not released |
+| **X** | = took nothing up |
+| **S** | = bad segmentation (two cells merged, or one cut in two) |
+| mouse wheel / middle-drag | zoom / move |
+
+Then *Save labels*. Only labels made in blind mode are used.
+
+How many: at least **3 fields from different images**, about **100+ cells
+each**, both kinds well represented, **including the hard cells**. The
+*Borderline review* button walks you through exactly those. Your existing ~536
+blind labels on A1, A2, B1, B2 already count.
+
+Do **not** re-run Cellpose (*Re-run Cellpose* / `--force`) on a field after
+labelling it: new masks get new cell numbers and the labels would point at the
+wrong cells. Training checks this and refuses such fields.
+
+### Step 2 — Train
+
+*Add folder…* → the parent folder, e.g. `…\8_cond_pre_glucose` (all subfolders
+are searched for your labels; add several folders for several experiments).
+If you used *Save results to* on the Run tab, also set *Results folder*.
+Choose *normal* → **Train model**.
+
+Takes a few minutes. At the end the log shows a table and a **VERDICT**:
+
+```
+  field                         n  CNN acc  rule acc
+  8_cond_pre_glucose/A1       134    89.6%     87.3%
+  ...
+  same cells : CNN 89.1%  vs  rule 86.0%
+  VERDICT: ...
+```
+
+Each line is a field the network **did not see while training** — an honest
+test. The verdict tells you whether the CNN is better than the rule, equal
+(keep the rule), or worse (don't use it). *Open training report* shows it
+again later.
+
+### Step 3 — Classify
+
+On the **Run** tab: parent folder + tick samples (they must have been analysed
+once — the CNN reuses the cell masks). Back on the CNN tab: pick the model →
+**Classify ticked samples**.
+
+Per sample, next to the normal results:
+`…_cnn.csv` (every cell: probability, CNN call, rule call, agree yes/no),
+`…_cnn_summary.csv`, `…_cnn_overlay.png`; at parent level
+`…_cnn_batch_summary.csv` → load it in the **Figures** tab like any summary.
+
+---
+
+## Part 5 — Getting updates
+
+When something new was pushed (e.g. after a session with Claude):
+
+- **Setup check** tab → **Get latest version from GitHub** → restart the
+  program. *or*
+- GitHub Desktop → *Fetch origin* → *Pull origin*.
+
+Your data, results, models and settings are never touched by an update.
+
+If it says *"you edited some of these files yourself"*: GitHub Desktop shows
+those files under *Changes* — either *Commit* them (keep your edit) or
+right-click → *Discard changes*, then update again.
+
+---
+
+## Part 6 — When you change something yourself
+
+GitHub Desktop lists every changed file with the exact lines. Write a short
+summary of **why** (e.g. *"CV cap 0.70 — 89 % on blind labels"*) → *Commit to
+main* → *Push origin*. That's your version history; every analysis run records
+which commit it used (`run_manifest_*.txt`). **Commit before analysing data for
+a figure**, so the result points to saved code.
+
+---
+
+## Troubleshooting
+
+| you see | do |
+|---|---|
+| CNN tab says *CPU only* | start with `Cargo Analysis.bat`, not by double-clicking a `.py` |
+| `.bat`: *No conda environment has everything…* | `conda activate rocm312` then `pip install cellpose tifffile pillow scipy matplotlib` |
+| training: *could not find the fluorescence image / mask* | that field was not analysed yet, or its files were moved — run the analysis on it |
+| training: *…mask was probably re-segmented… SKIPPED* | the labels belong to an older mask; label that field again |
+| training: *Only N labelled cells - too few* | label more cells (blind mode!) |
+| update: *git is not installed* | use GitHub Desktop *Fetch origin → Pull origin* |
+
+Full explanation of every step and formula: **DOCUMENTATION.md**.
