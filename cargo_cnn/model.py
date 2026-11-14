@@ -1,0 +1,80 @@
+# -*- coding: utf-8 -*-
+"""
+cargo_cnn.model - the network
+=============================================================================
+A deliberately SMALL convolutional network.
+
+    input 4 x 64 x 64
+      block 1   2 x (3x3 conv, batch-norm, ReLU)    16 maps   -> max-pool 32x32
+      block 2                                        32 maps   -> max-pool 16x16
+      block 3                                        64 maps   -> max-pool  8x8
+      block 4                                       128 maps
+      global average pool + global max pool  -> 256 numbers
+      dropout 0.3, one linear unit           -> logit
+      sigmoid(logit) = P(released)
+
+WHY SMALL
+  There are a few hundred labelled cells, not tens of thousands. A large
+  network (ResNet-50: 25 M parameters) would memorise every training cell
+  and generalise badly. This one has ~0.3 M parameters, and is trained with
+  heavy augmentation, dropout and weight decay - all ways of stopping it from
+  memorising.
+
+WHY AVERAGE AND MAX POOL TOGETHER
+  Average pooling answers "how much signal overall" (what brightness and fill
+  ratio measure). Max pooling answers "is there any very strong local feature
+  anywhere" - a single bright punctum, a sharp rim. Released vs trapped cargo
+  differs in both, so both are kept.
+=============================================================================
+"""
+
+import torch
+from torch import nn
+
+
+def _block(cin, cout):
+    return nn.Sequential(
+        nn.Conv2d(cin, cout, 3, padding=1, bias=False),
+        nn.BatchNorm2d(cout),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(cout, cout, 3, padding=1, bias=False),
+        nn.BatchNorm2d(cout),
+        nn.ReLU(inplace=True),
+    )
+
+
+class CellNet(nn.Module):
+    def __init__(self, in_ch=4, width=16, dropout=0.3):
+        super().__init__()
+        w = width
+        self.features = nn.Sequential(
+            _block(in_ch, w), nn.MaxPool2d(2),
+            _block(w, 2 * w), nn.MaxPool2d(2),
+            _block(2 * w, 4 * w), nn.MaxPool2d(2),
+            _block(4 * w, 8 * w),
+        )
+        self.drop = nn.Dropout(dropout)
+        self.head = nn.Linear(16 * w, 1)
+
+    def forward(self, x):
+        f = self.features(x)
+        f = torch.cat([f.mean(dim=(2, 3)), f.amax(dim=(2, 3))], dim=1)
+        return self.head(self.drop(f)).squeeze(1)
+
+
+def n_parameters(model):
+    return sum(p.numel() for p in model.parameters())
+
+
+def pick_device(requested="auto"):
+    """
+    cuda covers BOTH NVIDIA and AMD-ROCm (PyTorch-for-ROCm reports itself as
+    cuda), so the RX 7800 XT in the rocm312 environment is found here.
+    """
+    if requested and requested != "auto":
+        return torch.device(requested)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
