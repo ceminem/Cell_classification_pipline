@@ -654,11 +654,31 @@ strong local feature anywhere" (a punctum, a bright rim).
 
 ### 9.5 Training (`cargo_cnn/train.py`)
 
-**Loss** — binary cross-entropy with class weighting:
+**Loss** — binary cross-entropy:
 ```
-L = − [ w · y · log σ(z) + (1 − y) · log(1 − σ(z)) ],     w = n_not_released / n_released
+L = − [ y · log σ(z) + (1 − y) · log(1 − σ(z)) ]
 ```
-`w` stops the network from scoring well by always predicting the commoner class.
+
+**Balanced batches.** Cells are drawn for training with probability
+`1 / (number of cells in their class)`, so every batch is about half released,
+half not released, however unequal the labels are. Without this, a network
+trained on e.g. 84 % "released" labels learns that answering "released" for
+every cell already scores 84 % and stops there — in a test it caught 0 of 34
+not-released cells. The rare class is shown many times, each time with a
+different augmentation, which is what makes the repetition useful.
+
+**Epoch size.** One epoch is at least 1024 drawn cells (16 batches). With a few
+hundred labels a natural epoch is only 3–4 batches, and 60 such epochs were too
+little training. The epoch setting now means the same amount of training
+however many cells are labelled.
+
+**GPU self-test.** Before training (and prediction) one forward/backward pass
+is run on the GPU. With PyTorch-for-ROCm on Windows, AMD's MIOpen library can
+fail to compile its batch-normalisation training kernel at run time
+(`'type_traits' file not found` → `miopenStatusUnknownError`). The program then
+switches MIOpen off (`torch.backends.cudnn.enabled = False`, which on ROCm
+controls MIOpen) and uses PyTorch's own pre-built GPU kernels; only if that also
+fails does it fall back to the CPU. The log says which happened.
 
 **Optimiser** — AdamW, learning rate 1e-3, weight decay 1e-3 (pulls weights
 towards zero; another guard against memorising), batch size 64, 60 epochs,
@@ -686,12 +706,20 @@ and the accuracy would be inflated. (With fewer than 3 labelled fields this is
 impossible; the script falls back to random 5-fold over cells and says loudly
 that the number is optimistic.)
 
+**Balanced accuracy decides.** Plain accuracy is misleading when one class
+dominates: with 84 % "released" labels, "always released" scores 84 %. The
+table and the verdict therefore use balanced accuracy — the mean of the hit
+rate for released cells and the hit rate for not-released cells (guessing =
+50 %) — and also print how many cells of each class were caught. When fewer
+than 25 % of labels are in one class, the log says so and recommends labelling
+more of that class.
+
 On the same held-out cells the script compares the CNN against **the class the
 pipeline actually assigned** (the `Class` column of `*_results.csv`, i.e. Otsu
 threshold + CV cap as really run). It reports accuracy, balanced accuracy
 (mean of sensitivity and specificity), AUC, and a verdict:
 
-* CNN better by ≥ 2 points → worth using, confirm on a newly labelled field;
+* CNN better by ≥ 2 points (balanced) → worth using, confirm on a newly labelled field;
 * within ±2 points → keep the rule (simpler, explainable);
 * worse → do not use it.
 
@@ -779,6 +807,10 @@ only from training on your blind labels.
 
 ### 9.9 What the CNN cannot do
 
+* It needs enough examples of BOTH classes. Tested with 84 % / 16 % labels
+  (34 not-released cells in total), the rule stayed better even when scored
+  against the true answers (89 % vs 81 % balanced). Each class needs on the
+  order of 100+ blind labels before the CNN has a fair chance.
 * It cannot exceed the consistency of the labels. If ~9 % of cells are truly
   ambiguous, ~90 % is near the ceiling.
 * It learns the labeller's judgement, including any bias. More fields from

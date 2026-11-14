@@ -35,6 +35,13 @@ Analysis version unchanged (3.1): rule results are identical to before.
   (CRLF for the `.bat`), `config/gui_config.example.json`.
 
 ### Fixed
+- CNN training crashed on AMD + Windows (`miopenStatusUnknownError`: MIOpen
+  could not compile its batch-norm kernel). A GPU self-test now switches MIOpen
+  off and uses PyTorch's own GPU kernels, falling back to the CPU only if needed.
+- CNN with unequal labels (e.g. 84 % released) learned to call every cell
+  released. Training now uses balanced batches and a minimum epoch size; the
+  verdict uses balanced accuracy and reports hits per class.
+- Skipped training fields now list the .tif files found, so the reason is visible.
 - Launcher started the CPU-only `base` environment although it had found
   `rocm312` with the GPU. Environments are now tested in separate processes,
   the GUI is started with the chosen environment's own Python, and the choice

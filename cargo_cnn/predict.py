@@ -171,9 +171,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     import run_cargo_pipeline as rcp
-    from cargo_cnn.model import pick_device
+    from cargo_cnn.model import pick_device, ensure_working_device
 
-    device = pick_device(args.device)
+    device = ensure_working_device(pick_device(args.device), print, train=False)
     model, meta, model_id = load_model(args.model, device)
     print(f"model {model_id}  (trained {meta['created']} on "
           f"{sum(t['n'] for t in meta['trained_on'])} cells)  device {device}")

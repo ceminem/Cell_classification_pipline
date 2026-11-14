@@ -78,3 +78,71 @@ def pick_device(requested="auto"):
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def ensure_working_device(device, log=print, train=True, force=False):
+    """
+    Prove the GPU can actually run this network before relying on it, and
+    work around the failure seen with PyTorch-for-ROCm on Windows.
+
+    THE PROBLEM
+      On AMD + Windows, PyTorch hands batch-normalisation to AMD's MIOpen
+      library. During TRAINING, MIOpen compiles a small GPU program at run
+      time (MIOpenBatchNormFwdTrainSpatialHIP.cpp). On some ROCm-for-Windows
+      builds that compile fails with "'type_traits' file not found" and the
+      run dies with miopenStatusUnknownError. Cellpose never hits this
+      because it only predicts.
+
+    THE FIX, in order
+      1. try one forward+backward pass on the GPU;
+      2. if that fails, switch MIOpen off (torch.backends.cudnn.enabled =
+         False - on ROCm this flag controls MIOpen). PyTorch then uses its own
+         pre-built GPU kernels, which need no run-time compilation. Slower
+         than MIOpen in principle; irrelevant for a network this small;
+      3. if that fails too, use the CPU and say so.
+
+    Returns the device to use. force=True runs the test even on the CPU
+    (used by the tests).
+    """
+    import torch
+
+    if device.type == "cpu" and not force:
+        return device
+
+    def attempt():
+        m = CellNet().to(device)
+        x = torch.randn(4, 4, 64, 64, device=device)
+        if train:
+            m.train()
+            m(x).sum().backward()
+        else:
+            m.eval()
+            with torch.no_grad():
+                m(x)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+
+    try:
+        attempt()
+        return device
+    except Exception as exc:
+        first = (str(exc).strip().splitlines() or ["?"])[0][:120]
+    log(f"GPU self-test failed ({first}).")
+
+    if torch.backends.cudnn.enabled:
+        log("  This is a known problem of AMD's MIOpen library with ROCm on "
+            "Windows\n  (a kernel it compiles at run time does not build). "
+            "Switching MIOpen off and\n  using PyTorch's own GPU kernels "
+            "instead...")
+        torch.backends.cudnn.enabled = False
+        try:
+            attempt()
+            log("  -> works. Training continues on the GPU.")
+            return device
+        except Exception as exc:
+            first = (str(exc).strip().splitlines() or ["?"])[0][:120]
+            log(f"  -> still failing ({first}).")
+
+    log("  Falling back to the CPU. Training still works, it just takes "
+        "several minutes.")
+    return torch.device("cpu")

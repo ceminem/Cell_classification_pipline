@@ -290,6 +290,27 @@ def _find_mask(sample_dir, hint=""):
     return tifs[0] if len(tifs) == 1 else None
 
 
+def _tif_listing(folder):
+    """What image files a folder holds - shown when no fluorescence image
+    could be identified, so the cause is visible without opening Explorer."""
+    try:
+        t = sorted(f for f in os.listdir(folder) if f.lower().endswith((".tif", ".tiff")))
+    except OSError:
+        return "(folder not readable)"
+    if not t:
+        return "no .tif files at all"
+    return ", ".join(t[:8]) + (" ..." if len(t) > 8 else "")
+
+
+def _no_fluor_message(cpath, sample_dir):
+    return (f"  ! skipped {os.path.basename(cpath)}\n"
+            f"      no fluorescence image identified in {sample_dir}\n"
+            f"      .tif files there: {_tif_listing(sample_dir)}\n"
+            "      The labels need the ORIGINAL fluorescence image next to the "
+            "mask: a file\n      whose name contains 'fluor' (or the two "
+            "acquisition tifs of the sample).")
+
+
 def _results_index(roots):
     """{results base name: path} for every *_results.csv under the roots."""
     idx = {}
@@ -360,7 +381,7 @@ def discover(roots, log=print, results_roots=None):
                                  "results": res[0] if res else None})
                     if not fl:
                         sets.pop()
-                        log(f"  ! {cpath}: no fluorescence image in {sample_dir}")
+                        log(_no_fluor_message(cpath, sample_dir))
                     continue
 
                 # 2. Fallback for label files whose name does not match a mask.
@@ -385,10 +406,12 @@ def discover(roots, log=print, results_roots=None):
                     mb = os.path.basename(mask).rsplit("_cp_masks", 1)[0]
                     if mb in index:
                         res = [index[mb]]
-                if not fl or not mask:
-                    log(f"  ! {cpath}: could not find the "
-                        f"{'fluorescence image' if not fl else 'mask'} in "
-                        f"{sample_dir} - list it in a --pairs file instead")
+                if not fl:
+                    log(_no_fluor_message(cpath, sample_dir))
+                    continue
+                if not mask:
+                    log(f"  ! skipped {os.path.basename(cpath)}: no *_cp_masks "
+                        f"file in {sample_dir} (.tif files: {_tif_listing(sample_dir)})")
                     continue
                 sets.append({"key": f"{os.path.basename(os.path.dirname(sample_dir))}/{well}",
                              "curated": cpath, "fluorescence": fl, "mask": mask,

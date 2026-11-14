@@ -1365,11 +1365,19 @@ class CargoGUI:
                 cv = meta.get("cv") or []
                 nn = sum(c["n"] for c in cv)
                 if nn:
-                    cnn = sum(c["cnn_acc"] * c["n"] for c in cv) / nn
-                    desc += f"  -  held-out accuracy {cnn * 100:.1f}%"
-                    rr = [c for c in cv if c.get("rule_acc") is not None]
+                    # balanced accuracy when the model has it (fair with
+                    # unequal classes), plain accuracy for older models
+                    k_c, k_r, what = (("cnn_bal", "rule_bal", "balanced")
+                                      if all("cnn_bal" in c for c in cv)
+                                      else ("cnn_acc", "rule_acc", "accuracy"))
+                    ok = [c for c in cv if c.get(k_c) is not None
+                          and c[k_c] == c[k_c]]
+                    if ok:
+                        cnn = sum(c[k_c] * c["n"] for c in ok) / sum(c["n"] for c in ok)
+                        desc += f"  -  held-out {what} {cnn * 100:.1f}%"
+                    rr = [c for c in cv if c.get(k_r) is not None and c[k_r] == c[k_r]]
                     if rr:
-                        rule = sum(c["rule_acc"] * c["n"] for c in rr) / sum(c["n"] for c in rr)
+                        rule = sum(c[k_r] * c["n"] for c in rr) / sum(c["n"] for c in rr)
                         desc += f" (rule {rule * 100:.1f}%)"
             except (OSError, ValueError, KeyError, TypeError):
                 pass

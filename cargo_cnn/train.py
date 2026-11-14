@@ -95,6 +95,8 @@ def scores(pred, y):
 
 # ─────────────────────────────────────────────────────────── training ──
 
+MIN_EPOCH_SAMPLES = 1024     # cells drawn per epoch, at least (16 batches of 64)
+
 def train_model(train_ex, args, device, log, seed=0, val_ex=None):
     import torch
     from torch.utils.data import DataLoader
@@ -106,19 +108,34 @@ def train_model(train_ex, args, device, log, seed=0, val_ex=None):
 
     y = np.array([e["y"] for e in train_ex])
     n_pos, n_neg = int(y.sum()), int(len(y) - y.sum())
-    # pos_weight balances the loss when one class is rarer, so the network
-    # cannot score well by always answering the majority class
-    pos_weight = torch.tensor([n_neg / max(n_pos, 1)], dtype=torch.float32,
-                              device=device)
-    lossf = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # BALANCED BATCHES. With e.g. 84% "released" labels, a network shown the
+    # cells in their natural proportion learns that "always released" already
+    # scores 84% and stops there - tested: it then caught 0 of 34
+    # not-released cells. So cells are drawn with probability 1/(size of their
+    # class): every batch is about half and half, and the rare class is seen
+    # many times, each time differently augmented (rotated, re-exposed, new
+    # background), which is what makes repeating it useful rather than
+    # memorising.
+    from torch.utils.data import WeightedRandomSampler
+    w = np.where(y == 1, 1.0 / max(n_pos, 1), 1.0 / max(n_neg, 1))
+    # An "epoch" is at least MIN_EPOCH_SAMPLES draws. With a few hundred
+    # labels a plain epoch is only 3-4 batches, so 60 epochs were ~200 weight
+    # updates - too few: tested, the network was still answering "released"
+    # for every cell. Fixing the amount of training per epoch makes the
+    # epoch setting mean the same thing however many cells are labelled.
+    sampler = WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double),
+                                    num_samples=max(len(y), MIN_EPOCH_SAMPLES),
+                                    replacement=True,
+                                    generator=torch.Generator().manual_seed(seed))
+    lossf = torch.nn.BCEWithLogitsLoss()
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
                             weight_decay=args.weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
     ds = D.CellDataset(train_ex, train=True, seed=seed,
                        exposure=(1 / args.exposure_aug, args.exposure_aug))
-    dl = DataLoader(ds, batch_size=args.batch, shuffle=True, num_workers=0,
-                    drop_last=len(ds) > args.batch)
+    dl = DataLoader(ds, batch_size=args.batch, sampler=sampler, num_workers=0,
+                    drop_last=True)
 
     for ep in range(args.epochs):
         model.train()
@@ -193,7 +210,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     import torch
-    from cargo_cnn.model import CellNet, n_parameters, pick_device
+    from cargo_cnn.model import (CellNet, n_parameters, pick_device,
+                                 ensure_working_device)
 
     lines = []
 
@@ -201,7 +219,7 @@ def main(argv=None):
         print(msg, flush=True)
         lines.append(str(msg))
 
-    device = pick_device(args.device)
+    device = ensure_working_device(pick_device(args.device), log, train=True)
     log(f"cargo_cnn {CNN_VERSION}   torch {torch.__version__}   device {device}"
         + (f" ({torch.cuda.get_device_name(0)})" if device.type == "cuda" else ""))
 
@@ -223,6 +241,19 @@ def main(argv=None):
     log(f"\n{len(ex)} cells ({int(y_all.sum())} released, "
         f"{int(len(y_all) - y_all.sum())} not released) from {len(groups)} fields "
         f"- cut out in {time.time() - t0:.0f}s")
+    n_pos = int(y_all.sum())
+    n_neg = int(len(y_all) - n_pos)
+    minority = min(n_pos, n_neg) / len(y_all)
+    if minority < 0.25:
+        rare = "not released" if n_neg < n_pos else "released"
+        log(f"\nNOTE: only {min(n_pos, n_neg)} of {len(y_all)} labelled cells "
+            f"({minority * 100:.0f}%) are '{rare}'.\n"
+            f"  A model that called EVERY cell '{'released' if rare == 'not released' else 'not released'}' "
+            f"would already reach {(1 - minority) * 100:.0f}% accuracy, so\n"
+            "  plain accuracy flatters everything. The verdict below uses BALANCED "
+            "accuracy\n  (mean of the hit rates in both classes; guessing = 50%).\n"
+            f"  The network also learns '{rare}' from few examples - labelling more "
+            f"'{rare}'\n  cells (blind) is the most useful thing to do next.")
     log(f"network: {n_parameters(CellNet(width=args.width)):,} parameters")
 
     # ---- cross-validation ----
@@ -269,37 +300,47 @@ def main(argv=None):
                                 "MeanWhole": round(e["mean_whole"], 3)})
 
         # ---- summary ----
-        log("\nRESULT ON HELD-OUT CELLS")
-        log(f"  {'field':<34} {'n':>5} {'CNN acc':>8} {'rule acc':>9} {'CNN AUC':>8}")
+        log("\nRESULT ON HELD-OUT CELLS  (balanced = mean of the hit rates for "
+            "released and\n  for not released; it cannot be inflated by labelling "
+            "mostly one kind)")
+        log(f"  {'field':<28} {'n':>5} {'CNN bal.':>9} {'rule bal.':>10} "
+            f"{'CNN acc':>8} {'rule acc':>9}")
+
+        def pct(sc, k):
+            return (sc[k] * 100) if (sc and np.isfinite(sc.get(k, np.nan))) else float("nan")
+
         for name, sc, sr, a in fold_table:
-            log(f"  {name[:34]:<34} {sc['n']:>5} {sc['acc'] * 100:>7.1f}% "
-                f"{(sr['acc'] * 100 if sr else float('nan')):>8.1f}% {a:>8.3f}")
+            log(f"  {name[-28:]:<28} {sc['n']:>5} {pct(sc, 'bal_acc'):>8.1f}% "
+                f"{pct(sr, 'bal_acc'):>9.1f}% {pct(sc, 'acc'):>7.1f}% {pct(sr, 'acc'):>8.1f}%")
         yy = np.array([r["label"] for r in cv_rows])
         pp = np.array([r["p_cnn"] for r in cv_rows])
         s_cnn = scores(pp >= 0.5, yy)
         both = [r for r in cv_rows if r["rule"] != ""]
         s_rule = scores([r["rule"] for r in both], [r["label"] for r in both]) if both else None
         s_cnn_same = scores([r["cnn"] for r in both], [r["label"] for r in both]) if both else None
-        log(f"\n  pooled CNN : accuracy {s_cnn['acc'] * 100:.1f}%   balanced "
-            f"{s_cnn['bal_acc'] * 100:.1f}%   AUC {auc(pp, yy):.3f}   (n={len(yy)})")
+        log(f"\n  pooled CNN : balanced {s_cnn['bal_acc'] * 100:.1f}%   accuracy "
+            f"{s_cnn['acc'] * 100:.1f}%   AUC {auc(pp, yy):.3f}   (n={len(yy)})")
+        log(f"               not-released cells caught: {s_cnn['tn']}/{s_cnn['tn'] + s_cnn['fp']}"
+            f"   released cells caught: {s_cnn['tp']}/{s_cnn['tp'] + s_cnn['fn']}")
         if s_rule:
-            log(f"  same cells : CNN {s_cnn_same['acc'] * 100:.1f}%  vs  rule "
-                f"{s_rule['acc'] * 100:.1f}%   (n={len(both)} cells that have a rule call)")
-            gain = (s_cnn_same["acc"] - s_rule["acc"]) * 100
+            log(f"  same cells : CNN balanced {s_cnn_same['bal_acc'] * 100:.1f}%  vs  rule "
+                f"{s_rule['bal_acc'] * 100:.1f}%    (accuracy {s_cnn_same['acc'] * 100:.1f}% "
+                f"vs {s_rule['acc'] * 100:.1f}%, n={len(both)})")
+            log(f"               rule: not-released caught {s_rule['tn']}/{s_rule['tn'] + s_rule['fp']}"
+                f"   released caught {s_rule['tp']}/{s_rule['tp'] + s_rule['fn']}")
+            gain = (s_cnn_same["bal_acc"] - s_rule["bal_acc"]) * 100
             log("")
             if gain >= 2.0:
-                log(f"  VERDICT: the CNN beats the rule by {gain:.1f} points on images "
-                    "it never saw.\n  Worth using - confirm on a newly labelled "
+                log(f"  VERDICT: the CNN beats the rule by {gain:.1f} points (balanced) on "
+                    "images it never saw.\n  Worth using - confirm on a newly labelled "
                     "field before switching a thesis figure.")
             elif gain > -2.0:
-                log(f"  VERDICT: within {abs(gain):.1f} points of the rule - no real "
-                    "difference.\n  Keep the rule (simpler, explainable). This "
-                    "matches the earlier finding that ~9% of\n  cells are "
-                    "ambiguous even to the labeller: that is a ceiling no model "
-                    "can pass.")
+                log(f"  VERDICT: within {abs(gain):.1f} points of the rule (balanced) - no "
+                    "real difference.\n  Keep the rule (simpler, explainable), or label "
+                    "more cells and train again.")
             else:
-                log(f"  VERDICT: the CNN is {-gain:.1f} points WORSE than the rule. "
-                    "Do not use it.\n  More labelled fields (different days) "
+                log(f"  VERDICT: the CNN is {-gain:.1f} points WORSE than the rule "
+                    "(balanced). Do not use it.\n  More labelled fields (different days) "
                     "usually help more than a bigger network.")
         else:
             log("  (no *_results.csv found next to the labels, so the rule could "
@@ -333,7 +374,9 @@ def main(argv=None):
                         "released": sum(e["y"] for e in ex if e["group"] == g)}
                        for g in groups],
         "cv": [{"field": n, "n": sc["n"], "cnn_acc": sc["acc"],
-                "rule_acc": (sr["acc"] if sr else None), "auc": a}
+                "rule_acc": (sr["acc"] if sr else None),
+                "cnn_bal": sc["bal_acc"],
+                "rule_bal": (sr["bal_acc"] if sr else None), "auc": a}
                for n, sc, sr, a in fold_table],
         "git": git,
         "torch": torch.__version__,
