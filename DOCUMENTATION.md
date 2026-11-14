@@ -366,9 +366,23 @@ cells take anything up.
 
 ### 5.1 Labels
 
-The curation tool (`cargo_curate.py`, not in this snapshot of the repository)
-shows cells one at a time; the user labels them released / not released. In
-**blind** mode the automatic colours are hidden. Only blind labels
+The curation tool (`cargo_curate.py`) shows the whole field, zoomable; the user
+labels cells with the keyboard (R released, N not released, X no uptake, S bad
+segmentation, M a cell Cellpose missed). In **blind** mode the class colours
+are hidden but outlines stay, so cells can be found without seeing the
+software's answer. *Borderline review* walks through the 80 cells closest to
+the threshold, uncoloured, and only then offers to reveal the call. Each label
+is saved with its origin (`Source`): `manual_blind` (used for fitting and
+training), `manual_review` (made with colours visible; recorded only),
+`bad_segmentation` (merged/split cells, excluded from fitting because their
+mean intensity belongs to no real cell), `manual_added` (missed cells,
+counted only). File: `edited_results/<base>_curated.csv`; the automatic
+`*_results.csv` is never modified.
+
+*Fit threshold to my BLIND labels* tries every observed brightness value as
+threshold, combined with every observed CV value (rounded to 0.01) as cap, and
+keeps the pair with the highest agreement. Below 85 % it warns that brightness
+and CV cannot capture what is being judged in that image. Only blind labels
 (`Source = manual_blind`) are used for evaluation and for training: labels made
 while seeing the software's answer lean towards it and would flatter whatever
 rule was active at the time.
@@ -804,6 +818,7 @@ labels are evidence.**
 | B13 | *(2026-11-14)* run record listed the wrong input files | fingerprint block ran before `find_channels` for the current sample | moved below it |
 | B14 | *(2026-11-14)* first "Cellpose cellprob" box had no effect | the setting was listed twice in the GUI | duplicate removed |
 | B15 | *(2026-11-14)* GUI refused to run without the legacy macro | validation required the `.ijm` though numpy is the default | check removed; setup check marks it optional |
+| B16 | *(2026-11-14)* curator could open the wrong mask | it took the first file containing `_cp_masks` — including `_cp_masks_bbox.csv`, and an older mask whenever its name sorted first | only image files; prefer the mask with a matching results file, then the newest; choice shown in the title line |
 
 ### 10.4 Tools added along the way
 
@@ -888,9 +903,13 @@ Run the analysis from the cloned folder from now on (`Cargo Analysis.bat` sits
 inside it). Copy your old `cargo_gui_settings.json` into it to keep your GUI
 settings — it is ignored by git because it holds local paths.
 
-The files missing from this snapshot (`cargo_curate.py`, `collage_gui.py`,
-`collage_engine.py`, `Start_Collage_Builder.bat`, the `.ijm` macro) can be
-copied in and committed the same way as any change below.
+The files not yet in the repository (`collage_gui.py`, `collage_engine.py`,
+`Start_Collage_Builder.bat`, the `.ijm` macro) can be copied in and committed
+the same way as any change below. **Copy only the newest version of a file**:
+an older copy of `cargo_measure.py` (without `core_cv_cap` and the extra
+features) makes the pipeline crash, and an older `Cargo Analysis.bat` picks the
+CPU-only `base` environment. `git diff` before committing shows immediately if a
+file is going backwards.
 
 ### 12.3 Everyday workflow
 
@@ -960,7 +979,7 @@ unusable. Data stays on the lab drive; the run record links data and code.
 | tag / commit | content |
 |---|---|
 | `v3.1` | unchanged import of the working copy of 2026-11-14 |
-| following commits | bug fixes B13–B15, git commit in run records, CNN module, synthetic test, documentation |
+| following commits | bug fixes B13–B16, git commit in run records, CNN module, synthetic test, documentation, curation tool |
 
 `CHANGELOG.md` lists changes in plain language, including the pre-git history.
 
@@ -1008,9 +1027,11 @@ unusable. Data stays on the lab drive; the run record links data and code.
     (the CNN's `auc` averages them). Negligible with continuous features.
 11. Mann–Whitney uses the normal approximation without tie or continuity
     correction.
-12. Not in this repository yet: `cargo_curate.py`, `collage_gui.py`,
-    `collage_engine.py`, `Start_Collage_Builder.bat`,
+12. Not in this repository yet: `collage_gui.py`, `collage_engine.py`,
+    `Start_Collage_Builder.bat`,
     `Cargo_Release_Classification_v3_headless.ijm`, `INSTALL.md`.
+13. The curator's help text still quotes the 195-label result (v2.1); its
+    classification uses the v3.1 rule (brightness + CV cap).
 
 ---
 
@@ -1025,6 +1046,7 @@ unusable. Data stays on the lab drive; the run record links data and code.
 | `cargo_plot.py` | figures and statistics |
 | `cargo_interactive.py` | click / drag / recolour / rename bars |
 | `cargo_labels.py` | plate layout → sample names |
+| `cargo_curate.py` | curation: zoom, blind labelling, borderline review, threshold fit |
 | `cargo_compare.py` | which rule best matches the blind labels |
 | `cargo_version.py` | analysis version, version history, run records, git stamp |
 | `cargo_cnn/data.py` | crops, channels, augmentation, finding labelled fields |

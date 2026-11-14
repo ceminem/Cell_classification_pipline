@@ -15,6 +15,7 @@ Analysis version unchanged (3.1): rule results are identical to before.
   not released from blind labels; background-robust inputs; leave-one-field-out
   validation against the rule; prediction writes `*_cnn.csv`,
   `*_cnn_summary.csv`, an overlay and a batch summary for the Figures tab.
+- **Curation tool** `cargo_curate.py` added to the repository.
 - **Synthetic test data** (`tests/make_synthetic.py`) with known answers.
 - **Run records store the git commit**, nearest tag, and a warning when the code
   had uncommitted edits.
@@ -28,6 +29,8 @@ Analysis version unchanged (3.1): rule results are identical to before.
 - GUI: the Cellpose *cellprob* setting appeared twice; the first box did nothing.
 - GUI refused to start a run when the legacy Fiji macro was missing, although
   the default numpy backend does not use it.
+- Curator could open the bounding-box table or an older mask instead of the
+  current one when a sample folder held several `_cp_masks` files.
 
 ## Pre-git history (reconstructed from the version record)
 
