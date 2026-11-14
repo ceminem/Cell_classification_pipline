@@ -1,0 +1,10 @@
+# Core pipeline (segmentation + measurement + GUI)
+cellpose>=4.0        # brings torch; on AMD install the ROCm build of torch first
+numpy
+scipy
+tifffile
+pillow
+matplotlib           # Figures tab only
+
+# CNN classifier (cargo_cnn/) uses the same torch that Cellpose installs.
+# No extra packages are needed.

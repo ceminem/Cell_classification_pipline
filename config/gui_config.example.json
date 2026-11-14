@@ -1,0 +1,15 @@
+{
+  "FILL_RATIO_THRESHOLD": "0.65",
+  "CORE_CV_CAP": "0.65",
+  "BRIGHTNESS_THRESHOLD": "25.7",
+  "CELLPROB_THRESHOLD": "0.0",
+  "CORE_CV_THRESHOLD": "0.60",
+  "MIN_CELL_MEAN": "5",
+  "CORE_RADIUS_FRACTION": "0.5",
+  "ROLLING_BALL_RADIUS": "50",
+  "CELLPOSE_SCALE_FACTOR": "0.5",
+  "FLOW_THRESHOLD": "0.4",
+  "USE_GPU": true,
+  "FIJI_MEMORY_MB": 12288,
+  "FIJI_DIR": "C:\\Users\\cemin\\Documents\\Molbio\\Fiji\\Fiji"
+}

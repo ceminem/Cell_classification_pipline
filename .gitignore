@@ -1,0 +1,40 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# ---- machine-specific settings written by the GUI ----
+# These hold local paths (Fiji folder, data folders) and change on every run.
+# An example lives in config/gui_config.example.json instead.
+_gui_config.json
+_gui_labels.txt
+cargo_gui_settings.json
+
+# ---- microscopy data and results: NEVER commit these ----
+# Raw images are hundreds of MB each; GitHub rejects files over 100 MB and the
+# repository would become unusable. Data belongs on the lab drive, not in git.
+*.tif
+*.tiff
+*.png
+*.jpg
+*.jpeg
+*_results.csv
+*_summary.csv
+*_batch_summary.csv
+*_curated.csv
+*_bbox.csv
+*_log.txt
+*_cnn.csv
+run_manifest_*.json
+run_manifest_*.txt
+edited_results/
+
+# ---- trained CNN models ----
+# Model weights are binary and change with every training run. Keep them in
+# the models/ folder locally; attach the one used for a thesis figure to a
+# GitHub Release instead of committing it. The training report (text) IS kept.
+models/**/*.pt
+models/**/*.pth
+
+# allow images that document the code itself
+!docs/**/*.png

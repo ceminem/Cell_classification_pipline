@@ -1,0 +1,10 @@
+# Windows batch files must have CRLF line endings. With LF-only endings cmd.exe
+# misreads labels, and "call :score_env" in Cargo Analysis.bat can jump to the
+# wrong place or fail. Git converts them on checkout regardless of platform.
+*.bat  text eol=crlf
+
+# everything else: store with LF, check out natively
+*.py   text
+*.md   text
+*.json text
+*.txt  text
