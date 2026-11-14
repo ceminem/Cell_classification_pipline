@@ -31,8 +31,11 @@ so an older copy of a file can never be started by accident.
 
 Double-click **`Cargo Analysis.bat`** (or its desktop shortcut).
 
-It finds conda, tests every environment, and starts the program in the one
-with a working GPU. The black window shows which:
+It finds conda, tests every environment (each in its own separate process,
+which takes a little while the first time), and starts the program with the
+Python of the environment that has a working GPU. It remembers that choice in
+`launcher_environment.txt`, so later starts are quick. The black window shows
+which:
 
 ```
  Environment : rocm312
@@ -151,6 +154,7 @@ a figure**, so the result points to saved code.
 | you see | do |
 |---|---|
 | CNN tab says *CPU only* | start with `Cargo Analysis.bat`, not by double-clicking a `.py` |
+| `.bat` picks the wrong environment | create `launcher_environment.txt` next to the `.bat` containing just `rocm312`; delete the file to let it search again. Don't edit the `.bat` itself (that blocks updates) |
 | `.bat`: *No conda environment has everything…* | `conda activate rocm312` then `pip install cellpose tifffile pillow scipy matplotlib` |
 | training: *could not find the fluorescence image / mask* | that field was not analysed yet, or its files were moved — run the analysis on it |
 | training: *…mask was probably re-segmented… SKIPPED* | the labels belong to an older mask; label that field again |

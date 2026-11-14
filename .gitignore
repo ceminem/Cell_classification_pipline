@@ -39,3 +39,6 @@ edited_results/
 
 # trained CNN models: weights, reports and per-cell predictions stay local
 models/
+
+# the launcher remembers the environment it chose (machine-specific)
+launcher_environment.txt

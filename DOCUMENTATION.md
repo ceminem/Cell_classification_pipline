@@ -78,9 +78,11 @@ one brightfield and one fluorescence image per sample.
 
 ### Run (GUI)
 
-Double-click **`Cargo Analysis.bat`**. It finds conda, scores every environment
-(GPU-capable = 2, CPU-only = 1, missing packages = 0) and starts the GUI in the
-best one. Then: **Setup check** tab → everything green → **Run** tab → choose
+Double-click **`Cargo Analysis.bat`**. It finds conda and tests every named
+environment with `tools/env_probe.py`, each through `conda run` in a separate
+process (GPU-capable = 2, CPU-only = 1, missing packages = 0). The best one is
+remembered in `launcher_environment.txt` (also the place to force a choice) and
+the GUI is started with **that environment's own `python.exe` by full path**. Then: **Setup check** tab → everything green → **Run** tab → choose
 the *parent* folder (the one containing A1, A2, …) → tick samples → **Run
 analysis**.
 
@@ -836,6 +838,7 @@ labels are evidence.**
 | B13 | *(2026-11-14)* run record listed the wrong input files | fingerprint block ran before `find_channels` for the current sample | moved below it |
 | B14 | *(2026-11-14)* first "Cellpose cellprob" box had no effect | the setting was listed twice in the GUI | duplicate removed |
 | B15 | *(2026-11-14)* GUI refused to run without the legacy macro | validation required the `.ijm` though numpy is the default | check removed; setup check marks it optional |
+| B17 | *(2026-11-14)* launcher measured rocm312 as the GPU environment and still started `base` | the search activated every environment in turn inside one batch script; something in those repeated activations disturbed the script's own selection variables (path-only entries such as PyMOL were also not skipped, because `findstr /c:"\"` does not search for a backslash) | environments are tested with `conda run` in separate processes, nothing is activated during the search; the winner's `python.exe` is started by full path; path-only entries skipped by string comparison; choice remembered |
 | B16 | *(2026-11-14)* curator could open the wrong mask | it took the first file containing `_cp_masks` — including `_cp_masks_bbox.csv`, and an older mask whenever its name sorted first | only image files; prefer the mask with a matching results file, then the newest; choice shown in the title line |
 
 ### 10.4 Tools added along the way

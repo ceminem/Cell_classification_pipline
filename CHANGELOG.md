@@ -33,6 +33,10 @@ Analysis version unchanged (3.1): rule results are identical to before.
   (CRLF for the `.bat`), `config/gui_config.example.json`.
 
 ### Fixed
+- Launcher started the CPU-only `base` environment although it had found
+  `rocm312` with the GPU. Environments are now tested in separate processes,
+  the GUI is started with the chosen environment's own Python, and the choice
+  is remembered in `launcher_environment.txt`.
 - Run record fingerprinted the **previous** sample's input files (first sample:
   none). Measurements were never affected.
 - GUI: the Cellpose *cellprob* setting appeared twice; the first box did nothing.
