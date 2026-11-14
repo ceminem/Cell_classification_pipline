@@ -290,7 +290,18 @@ def _find_mask(sample_dir, hint=""):
     return tifs[0] if len(tifs) == 1 else None
 
 
-def discover(roots, log=print):
+def _results_index(roots):
+    """{results base name: path} for every *_results.csv under the roots."""
+    idx = {}
+    for root in roots or []:
+        for dirpath, _d, files in os.walk(root):
+            for fn in files:
+                if fn.endswith("_results.csv") and not fn.endswith("_cnn_results.csv"):
+                    idx.setdefault(fn[:-len("_results.csv")], os.path.join(dirpath, fn))
+    return idx
+
+
+def discover(roots, log=print, results_roots=None):
     """
     Find (curated, fluorescence, mask, results) sets under the given folders.
 
@@ -298,12 +309,17 @@ def discover(roots, log=print):
         <sample>/<acquisition tifs>  +  <sample>/<base>_cp_masks.tif
         <sample>/edited_results/<...>_results.csv  and  <...>_curated.csv
 
-    If results were written to a separate --output folder, the raw images are
-    not next to the curated file and discovery cannot pair them. Use a pairs
-    file instead (see load_pairs_file).
+    The curator always saves labels into <sample>/edited_results, next to the
+    images. If the pipeline wrote its results to a separate "Save results to"
+    folder, give that folder as results_roots: the results file is then found
+    by name - the pipeline names the mask and the results with the same base,
+    so "<base>_cp_masks.tif" belongs to "<base>_results.csv". Without a
+    results file training still works; only the comparison with the rule and
+    the re-segmentation check are skipped.
     """
     import run_cargo_pipeline as rcp
 
+    index = _results_index(list(roots) + list(results_roots or []))
     sets = []
     for root in roots:
         for dirpath, _d, files in os.walk(root):
@@ -320,6 +336,34 @@ def discover(roots, log=print):
                 except OSError:
                     bf, fl = None, None
                 well = os.path.basename(sample_dir)
+
+                # 1. EXACT link. The curator names the label file after the mask
+                #    it opened: "<base>_curated.csv" was made on
+                #    "<base>_cp_masks.tif", and the pipeline wrote that mask's
+                #    measurements to "<base>_results.csv". This is the only
+                #    link that is certain, so it is tried first.
+                mask = None
+                for ext in (".tif", ".tiff", ".png"):
+                    p = os.path.join(sample_dir, key + "_cp_masks" + ext)
+                    if os.path.isfile(p):
+                        mask = p
+                        break
+                res = []
+                if mask:
+                    p = os.path.join(dirpath, key + "_results.csv")
+                    if os.path.isfile(p):
+                        res = [p]
+                    elif key in index:
+                        res = [index[key]]
+                    sets.append({"key": f"{os.path.basename(os.path.dirname(sample_dir))}/{well}",
+                                 "curated": cpath, "fluorescence": fl, "mask": mask,
+                                 "results": res[0] if res else None})
+                    if not fl:
+                        sets.pop()
+                        log(f"  ! {cpath}: no fluorescence image in {sample_dir}")
+                    continue
+
+                # 2. Fallback for label files whose name does not match a mask.
                 res = [os.path.join(dirpath, f) for f in files
                        if f.endswith("_results.csv")]
                 if len(res) > 1:
@@ -328,7 +372,6 @@ def discover(roots, log=print):
                 # "8_cond_pre_glucose_A1_cp_masks.tif" from before the plate
                 # layout was used and "A1_plus-His-..._cp_masks.tif" after. The
                 # mask written alongside the results file is the right one.
-                mask = None
                 if res:
                     rb = os.path.basename(res[0])[:-len("_results.csv")]
                     for ext in (".tif", ".tiff", ".png"):
@@ -338,6 +381,10 @@ def discover(roots, log=print):
                             break
                 if mask is None:
                     mask = _find_mask(sample_dir, well)
+                if mask and not res:
+                    mb = os.path.basename(mask).rsplit("_cp_masks", 1)[0]
+                    if mb in index:
+                        res = [index[mb]]
                 if not fl or not mask:
                     log(f"  ! {cpath}: could not find the "
                         f"{'fluorescence image' if not fl else 'mask'} in "

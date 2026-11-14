@@ -170,6 +170,9 @@ def main(argv=None):
     ap.add_argument("--data", nargs="*", default=[],
                     help="folder(s) to search for *_curated.csv")
     ap.add_argument("--pairs", help="semicolon CSV: curated;fluorescence;mask;results")
+    ap.add_argument("--results", nargs="*", default=[],
+                    help="extra folder(s) holding *_results.csv, if the pipeline "
+                         "wrote them to a separate 'Save results to' folder")
     ap.add_argument("--out", default=os.path.join(_ROOT, "models"),
                     help="where the model folder is created")
     ap.add_argument("--epochs", type=int, default=60)
@@ -206,7 +209,7 @@ def main(argv=None):
     if args.pairs:
         sets += D.load_pairs_file(args.pairs)
     if args.data:
-        sets += D.discover(args.data, log)
+        sets += D.discover(args.data, log, results_roots=args.results)
     if not sets:
         raise SystemExit("No labelled fields found. Give --data <folder> or --pairs <file>.")
 
