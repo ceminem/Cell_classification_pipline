@@ -320,11 +320,24 @@ def discover(roots, log=print):
                 except OSError:
                     bf, fl = None, None
                 well = os.path.basename(sample_dir)
-                mask = _find_mask(sample_dir, well)
                 res = [os.path.join(dirpath, f) for f in files
                        if f.endswith("_results.csv")]
                 if len(res) > 1:
                     res = [r for r in res if well in os.path.basename(r)] or res[:1]
+                # A sample folder can hold masks from several runs - e.g.
+                # "8_cond_pre_glucose_A1_cp_masks.tif" from before the plate
+                # layout was used and "A1_plus-His-..._cp_masks.tif" after. The
+                # mask written alongside the results file is the right one.
+                mask = None
+                if res:
+                    rb = os.path.basename(res[0])[:-len("_results.csv")]
+                    for ext in (".tif", ".tiff", ".png"):
+                        p = os.path.join(sample_dir, rb + "_cp_masks" + ext)
+                        if os.path.isfile(p):
+                            mask = p
+                            break
+                if mask is None:
+                    mask = _find_mask(sample_dir, well)
                 if not fl or not mask:
                     log(f"  ! {cpath}: could not find the "
                         f"{'fluorescence image' if not fl else 'mask'} in "
