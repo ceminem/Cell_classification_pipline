@@ -1820,7 +1820,14 @@ class CargoGUI:
                          ("cellpose", "segmentation")]:
             try:
                 m = __import__(mod)
-                ver = getattr(m, "__version__", "?")
+                ver = getattr(m, "__version__", None)
+                if not ver:
+                    # cellpose 4 has no __version__; ask the installed package
+                    try:
+                        from importlib.metadata import version as _v
+                        ver = _v({"PIL": "pillow"}.get(mod, mod))
+                    except Exception:
+                        ver = "?"
                 self._sput(f"  {mod:<10} {ver}", ok)
             except ImportError:
                 self._sput(f"  {mod:<10} MISSING  ({why})", bad)
