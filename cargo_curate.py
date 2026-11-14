@@ -330,7 +330,12 @@ SAVED FILE
             messagebox.showerror(APP, str(exc))
             return
 
-        masks = [f for f in names if "_cp_masks" in f.lower()]
+        # Only IMAGE masks. "_cp_masks" also matches the bounding-box table
+        # "<base>_cp_masks_bbox.csv", which used to be picked whenever it
+        # listed first.
+        masks = [f for f in names
+                 if "_cp_masks" in f.lower()
+                 and f.lower().endswith((".tif", ".tiff", ".png"))]
         tifs = [f for f in sorted(names)
                 if f.lower().endswith((".tif", ".tiff"))
                 and not any(t in f.lower()
@@ -341,10 +346,20 @@ SAVED FILE
                      "Run the analysis on it first.")
             return
 
-        fluor = next((f for f in tifs if "fluor" in f.lower()), tifs[-1])
-        fluor = os.path.join(folder, fluor)
-        mask = os.path.join(folder, masks[0])
-        self.base = os.path.splitext(masks[0])[0].replace("_cp_masks", "")
+        mask_name = self._choose_mask(folder, masks)
+        # same channel identification as the pipeline, so the curator always
+        # measures the image the pipeline measured
+        fluor = None
+        try:
+            import run_cargo_pipeline as rcp
+            _bf, fluor = rcp.find_channels(folder)
+        except Exception:
+            fluor = None
+        if not fluor:
+            fluor = os.path.join(folder, next((f for f in tifs if "fluor" in f.lower()),
+                                              tifs[-1]))
+        mask = os.path.join(folder, mask_name)
+        self.base = os.path.splitext(mask_name)[0].replace("_cp_masks", "")
         self.out_dir = os.path.join(folder, "edited_results")
 
         self.lbl.config(text="measuring, please wait...")
@@ -368,12 +383,47 @@ SAVED FILE
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _choose_mask(self, folder, masks):
+        """
+        Pick the mask to curate when a folder holds more than one.
+
+        This happens after a plate layout is added: the old run left
+        "8_cond_pre_glucose_A1_cp_masks.tif", the new one
+        "A1_plus-His-..._cp_masks.tif". Taking the first in the listing (the
+        old behaviour) silently opened the OLD mask, so labels were attached to
+        cell ids that the current results no longer use.
+
+        Preference: a mask whose results file exists in edited_results (the
+        newest such), then the newest mask by modification time, .tif before
+        .png. The choice is shown in the title bar.
+        """
+        if len(masks) == 1:
+            return masks[0]
+        res_dir = os.path.join(folder, "edited_results")
+
+        def key(m):
+            base = os.path.splitext(m)[0].replace("_cp_masks", "")
+            has_results = os.path.isfile(os.path.join(res_dir, base + "_results.csv"))
+            is_tif = m.lower().endswith((".tif", ".tiff"))
+            try:
+                mtime = os.path.getmtime(os.path.join(folder, m))
+            except OSError:
+                mtime = 0.0
+            return (has_results, is_tif, mtime)
+
+        chosen = max(masks, key=key)
+        self._mask_note = (f"   (folder has {len(masks)} masks - using "
+                           f"{chosen}; the others are older runs)")
+        return chosen
+
     def _loaded(self, rows, raw, labels):
         self.rows = rows
         self.by_id = {r["CellID"]: r for r in rows}
         self.fluor_raw = raw
         self.labels = labels
-        self.lbl.config(text=f"{self.base}  -  {len(rows)} cells")
+        self.lbl.config(text=f"{self.base}  -  {len(rows)} cells"
+                             + getattr(self, "_mask_note", ""))
+        self._mask_note = ""
         self._read_existing()
         self._prepare()
         self._fit_view()
