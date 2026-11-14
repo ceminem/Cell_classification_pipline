@@ -110,8 +110,9 @@ TUNABLES = [
      "The mask is scaled back up before measurement either way."),
     ("flow_threshold", "Cellpose flow threshold", "0.4",
      "Cellpose default is 0.4. Raise to accept more cells."),
-    ("cellprob_threshold", "Cellpose cellprob threshold", "0.0",
-     "Cellpose default is 0.0. LOWER (e.g. -2) finds more/fainter cells."),
+    # NOTE: cellprob_threshold appears ONCE, above. A second entry with the
+    # same key used to sit here; it replaced the first in tune_vars, so typing
+    # into the first "Cellpose cellprob" box silently did nothing.
 ]
 
 # How much RAM the machine has -> how much heap Fiji is given (about half).
@@ -1295,12 +1296,10 @@ class CargoGUI:
                 f"{PIPELINE_SCRIPT} is not next to this GUI.\n"
                 f"Expected it in:\n{self.script_dir}")
             return None
-        if not os.path.isfile(os.path.join(self.script_dir, MACRO_FILE)):
-            messagebox.showerror(
-                APP_TITLE,
-                f"{MACRO_FILE} is not next to this GUI.\n"
-                f"Expected it in:\n{self.script_dir}")
-            return None
+        # The Fiji macro is only used by the legacy backend (USE_FIJI = True in
+        # run_cargo_pipeline.py). Measurement runs in numpy by default, so a
+        # missing macro must not block a run - it used to, which made a fresh
+        # copy of the code unusable until an unrelated .ijm file was found.
         return parent, chosen, script
 
     def _run(self):
@@ -1490,10 +1489,14 @@ class CargoGUI:
 
         # companion files
         self._sput("")
-        for fn in (PIPELINE_SCRIPT, MACRO_FILE):
-            p = os.path.join(self.script_dir, fn)
-            self._sput(f"{fn}: {'found' if os.path.isfile(p) else 'MISSING'}",
-                       ok if os.path.isfile(p) else bad)
+        p = os.path.join(self.script_dir, PIPELINE_SCRIPT)
+        self._sput(f"{PIPELINE_SCRIPT}: {'found' if os.path.isfile(p) else 'MISSING'}",
+                   ok if os.path.isfile(p) else bad)
+        p = os.path.join(self.script_dir, MACRO_FILE)
+        self._sput(f"{MACRO_FILE}: "
+                   + ("found" if os.path.isfile(p) else
+                      "not present (only needed for the legacy Fiji backend)"),
+                   ok if os.path.isfile(p) else "warn")
 
         # optional modules - report WHERE each was loaded from, because the
         # commonest cause of "the tab is not there" is an older copy of a file
