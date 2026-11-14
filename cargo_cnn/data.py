@@ -437,13 +437,22 @@ def load_pairs_file(path):
 
 # ─────────────────────────────────────────────────────── building sets ──
 
-def build_examples(sets, rolling_ball_radius=50, include_nonblind=False, log=print):
+def build_examples(sets, rolling_ball_radius=50, include_nonblind=False, log=print,
+                   min_cell_mean=5.0):
     """
     Cut every labelled cell out of its image.
 
     Returns a list of dicts: group (which field), cell_id, y (0/1), img/own/
     other (the crop), mean_whole, rule (the pipeline's own class for this cell
     if a results file was found, else None).
+
+    NO-UPTAKE CELLS ARE LEFT OUT. A labelled cell whose whole-cell mean is
+    below min_cell_mean is, for the pipeline, "no uptake" - excluded from the
+    release percentage and never shown to the CNN at prediction time. If it
+    carries a "not released" label it would still teach the network the
+    EASY part (dark = not released) and make the not-released class look
+    better learned than it is. In the first real run 15 of 69 "not released"
+    labels were such cells. They are skipped and counted; label them X.
 
     SAFETY CHECK: labels refer to Cellpose label ids. If the field was
     re-segmented after labelling (--force), the same id now points at a
@@ -480,9 +489,13 @@ def build_examples(sets, rolling_ball_radius=50, include_nonblind=False, log=pri
                 continue
 
         missing = 0
+        no_uptake = 0
         for cid, y in sorted(labels_by_id.items()):
             if cid not in table:
                 missing += 1
+                continue
+            if table[cid]["mean"] < min_cell_mean:
+                no_uptake += 1
                 continue
             img, own, other = extract_crop(fl, labels, cid, table[cid]["slice"])
             if not own.any():
@@ -497,6 +510,10 @@ def build_examples(sets, rolling_ball_radius=50, include_nonblind=False, log=pri
                              "mean_whole": table[cid]["mean"], "rule": rule})
         if missing:
             log(f"    ({missing} labelled ids not found in the mask)")
+        if no_uptake:
+            log(f"    ({no_uptake} labelled cells left out: brightness below "
+                f"{min_cell_mean:g} = no uptake, which the pipeline excludes too. "
+                "Label such cells X.)")
         del raw, fl, labels
     return examples
 

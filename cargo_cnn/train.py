@@ -233,7 +233,8 @@ def main(argv=None):
 
     log(f"\nLabelled fields: {len(sets)}")
     t0 = time.time()
-    ex = D.build_examples(sets, args.rolling_ball, args.include_nonblind, log)
+    ex = D.build_examples(sets, args.rolling_ball, args.include_nonblind, log,
+                          min_cell_mean=args.min_cell_mean)
     if len(ex) < 30:
         raise SystemExit(f"Only {len(ex)} labelled cells - too few to train on.")
     y_all = np.array([e["y"] for e in ex])

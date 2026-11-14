@@ -726,6 +726,13 @@ threshold + CV cap as really run). It reports accuracy, balanced accuracy
 The rule's thresholds were fitted on these same labels, so the comparison gives
 the rule a small home advantage. A CNN that still wins has earned it.
 
+**No-uptake cells are left out.** A labelled cell whose brightness is below
+`MIN_CELL_MEAN` (5) is "no uptake" for the pipeline: excluded from the release
+percentage and never shown to the CNN when classifying. Training skips it too,
+whatever its label, and logs how many were skipped. In the first real run 15 of
+69 "not released" labels were such cells; they taught only the easy part
+(dark = not released). Label them **X** in the curator.
+
 **Which mask belongs to which labels.** The curator names its file after the
 mask it opened: `<base>_curated.csv` was made on `<base>_cp_masks.tif`, whose
 measurements are `<base>_results.csv`. Training uses exactly this link first,

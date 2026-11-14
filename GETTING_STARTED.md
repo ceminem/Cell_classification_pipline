@@ -73,7 +73,7 @@ that has already been analysed. In the curation window:
 | **B** | blind mode on/off — **always label in blind mode** |
 | **R** | cell under the mouse = released |
 | **N** | = not released |
-| **X** | = took nothing up |
+| **X** | = took nothing up (use this, not N, for empty/dark cells - N is for cells that took particles up but did not release) |
 | **S** | = bad segmentation (two cells merged, or one cut in two) |
 | **V** | view: green fluorescence → green on brightfield → grey (the *Brightness* slider in the top bar helps with dim cells; display only, the measurement is unchanged) |
 | mouse wheel / middle-drag | zoom / move |

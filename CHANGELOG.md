@@ -35,6 +35,9 @@ Analysis version unchanged (3.1): rule results are identical to before.
   (CRLF for the `.bat`), `config/gui_config.example.json`.
 
 ### Fixed
+- CNN training skips labelled cells below the uptake limit (brightness < 5),
+  which the pipeline excludes and the CNN never classifies; they were
+  inflating the not-released class (15 of 69 labels in the first real run).
 - CNN training crashed on AMD + Windows (`miopenStatusUnknownError`: MIOpen
   could not compile its batch-norm kernel). A GPU self-test now switches MIOpen
   off and uses PyTorch's own GPU kernels, falling back to the CPU only if needed.
