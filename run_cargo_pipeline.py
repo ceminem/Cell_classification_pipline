@@ -949,6 +949,18 @@ def main():
         else:
             base = f"{parent_name}_{sample}"
         base_names[sample] = base
+
+        # ---- find the channel pair ----
+        bf_path, fluor_path = find_channels(folder)
+        if not bf_path or not fluor_path:
+            print(f"    SKIP: could not identify a brightfield/fluorescence pair")
+            failed.append(sample)
+            continue
+
+        # Fingerprint the inputs only AFTER they have been identified. This
+        # block used to sit above find_channels(), so the first sample raised a
+        # NameError (silently swallowed - no fingerprint recorded) and every
+        # later sample was recorded with the PREVIOUS sample's files.
         if manifest is not None:
             try:
                 import cargo_version
@@ -958,13 +970,6 @@ def main():
                 }
             except Exception:
                 pass
-
-        # ---- find the channel pair ----
-        bf_path, fluor_path = find_channels(folder)
-        if not bf_path or not fluor_path:
-            print(f"    SKIP: could not identify a brightfield/fluorescence pair")
-            failed.append(sample)
-            continue
         print(f"    brightfield  : {os.path.basename(bf_path)}")
         print(f"    fluorescence : {os.path.basename(fluor_path)}")
         if os.path.abspath(bf_path) == os.path.abspath(fluor_path):
