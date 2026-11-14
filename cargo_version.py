@@ -98,6 +98,31 @@ def file_fingerprint(path):
         return {"path": str(path), "size_bytes": None, "modified": None}
 
 
+def find_git():
+    """
+    Path to a git executable, or None.
+
+    GitHub Desktop - the easiest way to get this repository on Windows - ships
+    its own git but does NOT put it on the PATH, so plain "git" is not found.
+    Its copy lives in %LOCALAPPDATA%\\GitHubDesktop\\app-<version>\\resources\\
+    app\\git\\cmd\\git.exe; the newest version is used.
+    """
+    import shutil
+    found = shutil.which("git")
+    if found:
+        return found
+    if os.name == "nt":
+        import glob
+        base = os.environ.get("LOCALAPPDATA", "")
+        cands = glob.glob(os.path.join(base, "GitHubDesktop", "app-*", "resources",
+                                       "app", "git", "cmd", "git.exe"))
+        cands += glob.glob(os.path.join(os.environ.get("ProgramFiles", ""), "Git",
+                                        "cmd", "git.exe"))
+        if cands:
+            return sorted(cands)[-1]
+    return None
+
+
 def git_state(script_dir):
     """
     The git commit the code is running from, and whether it has uncommitted
@@ -112,16 +137,19 @@ def git_state(script_dir):
     the pipeline works the same on a machine that only has a copied folder.
     """
     import subprocess
+    git = find_git()
+    if not git:
+        return {}
     try:
         kw = dict(cwd=script_dir, capture_output=True, text=True, timeout=5)
         if os.name == "nt":
             kw["creationflags"] = 0x08000000      # CREATE_NO_WINDOW
-        head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], **kw)
+        head = subprocess.run([git, "rev-parse", "--short", "HEAD"], **kw)
         if head.returncode != 0:
             return {}
-        status = subprocess.run(["git", "status", "--porcelain",
+        status = subprocess.run([git, "status", "--porcelain",
                                  "--untracked-files=no"], **kw)
-        tag = subprocess.run(["git", "describe", "--tags", "--always"], **kw)
+        tag = subprocess.run([git, "describe", "--tags", "--always"], **kw)
         return {"commit": head.stdout.strip(),
                 "describe": tag.stdout.strip(),
                 "dirty": bool(status.stdout.strip())}
