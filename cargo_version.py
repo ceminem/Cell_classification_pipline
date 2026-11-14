@@ -23,9 +23,11 @@ WHY THIS MATTERS HERE MORE THAN USUAL
   of the settings that makes two runs trivially comparable.
 
 WHAT THIS IS NOT
-  It is not git. It does not version the source code itself - use git for that
-  if you want history and branching. This records what a RESULT came from,
-  which is the part that goes stale silently.
+  It is not git. It does not version the source code itself - git does that
+  (see DOCUMENTATION.md, "Version control"). This records what a RESULT came
+  from, which is the part that goes stale silently. When the code runs from a
+  git checkout, the run record also stores the commit id, which ties the two
+  together: result -> commit -> exact code.
 """
 
 from __future__ import annotations
@@ -96,9 +98,40 @@ def file_fingerprint(path):
         return {"path": str(path), "size_bytes": None, "modified": None}
 
 
+def git_state(script_dir):
+    """
+    The git commit the code is running from, and whether it has uncommitted
+    edits.
+
+    This is the link between a result and the repository history: a run record
+    saying "commit 3f2a9c1, clean" means the exact code can be recovered with
+    `git checkout 3f2a9c1`. "dirty" means files were edited after that commit,
+    so the record alone is not enough to reproduce the numbers - commit first.
+
+    Returns {} when git is not installed or the folder is not a repository, so
+    the pipeline works the same on a machine that only has a copied folder.
+    """
+    import subprocess
+    try:
+        kw = dict(cwd=script_dir, capture_output=True, text=True, timeout=5)
+        if os.name == "nt":
+            kw["creationflags"] = 0x08000000      # CREATE_NO_WINDOW
+        head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], **kw)
+        if head.returncode != 0:
+            return {}
+        status = subprocess.run(["git", "status", "--porcelain",
+                                 "--untracked-files=no"], **kw)
+        tag = subprocess.run(["git", "describe", "--tags", "--always"], **kw)
+        return {"commit": head.stdout.strip(),
+                "describe": tag.stdout.strip(),
+                "dirty": bool(status.stdout.strip())}
+    except (OSError, subprocess.SubprocessError):
+        return {}
+
+
 def code_fingerprint(script_dir):
     """
-    Hash of every module that can affect the numbers.
+    Hash of every module that can affect the numbers, plus the git commit.
 
     If a colleague reports a different result from the same settings, comparing
     these tells you immediately whether they are running the same code.
@@ -111,6 +144,10 @@ def code_fingerprint(script_dir):
                 out[fn] = hashlib.sha256(fh.read()).hexdigest()[:10]
         except OSError:
             out[fn] = "missing"
+    g = git_state(script_dir)
+    if g:
+        out["git_commit"] = g["commit"] + (" (UNCOMMITTED EDITS)" if g["dirty"] else "")
+        out["git_describe"] = g["describe"]
     return out
 
 
