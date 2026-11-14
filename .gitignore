@@ -30,11 +30,12 @@ run_manifest_*.txt
 edited_results/
 
 # ---- trained CNN models ----
-# Model weights are binary and change with every training run. Keep them in
-# the models/ folder locally; attach the one used for a thesis figure to a
-# GitHub Release instead of committing it. The training report (text) IS kept.
-models/**/*.pt
-models/**/*.pth
+# Weights are binary and change with every training run; the reports contain
+# per-cell data. The whole models/ folder stays local. Attach the model used
+# for a thesis figure to a GitHub Release instead.
 
 # allow images that document the code itself
 !docs/**/*.png
+
+# trained CNN models: weights, reports and per-cell predictions stay local
+models/
