@@ -9,6 +9,8 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- Curator shows the calcein signal in **green** (default), **green on
+  brightfield**, or grey (key **V**), with a display-only *Brightness* slider.
 - **CNN tab in the GUI**: open the curation tool, train, classify, open the
   report, with the compute device shown. Runs in the environment the `.bat`
   picked, so the GPU is used without activating anything.

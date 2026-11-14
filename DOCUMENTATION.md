@@ -381,6 +381,12 @@ mean intensity belongs to no real cell), `manual_added` (missed cells,
 counted only). File: `edited_results/<base>_curated.csv`; the automatic
 `*_results.csv` is never modified.
 
+**Display.** The *View* menu (key **V**) shows the calcein channel in green
+(default), in green over the brightfield (cell borders and nucleus visible
+next to the dye), or in grey; *Brightness* scales the display for dim cells.
+In the green views released cells are outlined light blue instead of green.
+Display settings never change a measurement.
+
 *Fit threshold to my BLIND labels* tries every observed brightness value as
 threshold, combined with every observed CV value (rounded to 0.01) as cap, and
 keeps the pair with the highest agreement. Below 85 % it warns that brightness

@@ -75,6 +75,7 @@ that has already been analysed. In the curation window:
 | **N** | = not released |
 | **X** | = took nothing up |
 | **S** | = bad segmentation (two cells merged, or one cut in two) |
+| **V** | view: green fluorescence → green on brightfield → grey (the *Brightness* slider in the top bar helps with dim cells; display only, the measurement is unchanged) |
 | mouse wheel / middle-drag | zoom / move |
 
 Then *Save labels*. Only labels made in blind mode are used.

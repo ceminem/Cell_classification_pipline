@@ -64,6 +64,13 @@ CLASS_COLORS = {
     "bad_segmentation":    (255, 0, 255),
 }
 OUTLINE_NEUTRAL = (185, 185, 185)
+
+# How the image is SHOWN. Display only - the measurement always uses the raw
+# green channel, whatever is chosen here.
+VIEWS = ["Green fluorescence", "Green on brightfield", "Grey"]
+# On a green image a green "released" outline would vanish, so in the green
+# views released cells are outlined light blue instead.
+RELEASED_ON_GREEN = (90, 170, 255)
 CYCLE = ["released", "not_released", "excluded_negative"]
 
 
@@ -107,6 +114,19 @@ class Curate:
         self.lbl.pack(side="left", padx=10)
         ttk.Button(top, text="Save labels", command=self._save).pack(side="right")
         ttk.Button(top, text="Fullscreen (F11)", command=self._fs).pack(side="right", padx=6)
+
+        # display controls (packed right-to-left: View, Brightness, slider)
+        self.view_var = tk.StringVar(value=VIEWS[0])
+        self.gain_var = tk.DoubleVar(value=1.0)
+        ttk.Scale(top, from_=0.3, to=4.0, variable=self.gain_var, orient="horizontal",
+                  length=140, command=lambda v: self._recompose()).pack(side="right", padx=4)
+        ttk.Label(top, text="Brightness").pack(side="right", padx=(10, 0))
+        vcb = ttk.Combobox(top, textvariable=self.view_var, values=VIEWS,
+                           state="readonly", width=20)
+        vcb.pack(side="right", padx=4)
+        vcb.bind("<<ComboboxSelected>>", lambda e: (self._recompose(),
+                                                    self.canvas.focus_set()))
+        ttk.Label(top, text="View (V):").pack(side="right")
 
         paned = ttk.PanedWindow(self.root, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=6, pady=4)
@@ -223,6 +243,7 @@ KEYS  (act on the cell under the pointer)
   Del remove your label
 
   B   blind mode      F11 fullscreen
+  V   view: green / green on brightfield / grey
   0   reset zoom      arrows  pan
 
 WHY SEGMENTATION ERRORS ARE FLAGGED SEPARATELY
@@ -232,6 +253,13 @@ WHY SEGMENTATION ERRORS ARE FLAGGED SEPARATELY
   the wrong way. Press S instead: those cells are recorded, excluded from the
   fit, and counted so you know how much of the image the segmentation got
   wrong.
+
+VIEW AND BRIGHTNESS
+  Only change how the picture is SHOWN, never what is measured. "Green on
+  brightfield" lays the calcein signal over the brightfield, so cell borders
+  and the nucleus are visible next to the dye. In the green views released
+  cells are outlined light blue, so the outline stands out from the signal.
+  Raise Brightness to judge dim cells.
 
 WHY BLIND MODE KEEPS OUTLINES
   You need to see the cells. What is hidden is the software's opinion, so
@@ -284,6 +312,8 @@ SAVED FILE
         r.bind("b", lambda e: (self.blind.set(not self.blind.get()), self._redraw()))
         r.bind("B", lambda e: (self.blind.set(not self.blind.get()), self._redraw()))
         r.bind("0", lambda e: self._fit_view())
+        r.bind("v", lambda e: self._cycle_view())
+        r.bind("V", lambda e: self._cycle_view())
         r.bind("<Delete>", lambda e: self._key(None))
         for k, dx, dy in (("<Left>", 80, 0), ("<Right>", -80, 0),
                           ("<Up>", 0, 80), ("<Down>", 0, -80)):
@@ -353,6 +383,7 @@ SAVED FILE
         try:
             import run_cargo_pipeline as rcp
             _bf, fluor = rcp.find_channels(folder)
+            self._bf_path = _bf
         except Exception:
             fluor = None
         if not fluor:
@@ -372,11 +403,21 @@ SAVED FILE
                "fill_ratio_threshold": 0.65, "core_cv_threshold": 0.60,
                "very_high_signal_cutoff": 1e9, "rolling_ball_radius": 50}
 
+        bf_path = getattr(self, "_bf_path", None)
+
         def work():
             try:
                 rows, raw, labels, _ = cm.measure_for_tuning(
                     fluor, mask, cfg, log=lambda m: None)
-                self.root.after(0, lambda: self._loaded(rows, raw, labels))
+                # brightfield, for the "Green on brightfield" view only
+                bf = None
+                if bf_path:
+                    try:
+                        import tifffile
+                        bf = tifffile.imread(bf_path)
+                    except Exception:
+                        bf = None
+                self.root.after(0, lambda: self._loaded(rows, raw, labels, bf))
             except Exception:
                 tb = traceback.format_exc()
                 self.root.after(0, lambda: messagebox.showerror(APP, tb.splitlines()[-1]))
@@ -416,7 +457,8 @@ SAVED FILE
                            f"{chosen}; the others are older runs)")
         return chosen
 
-    def _loaded(self, rows, raw, labels):
+    def _loaded(self, rows, raw, labels, bf=None):
+        self._bf_raw = bf
         self.rows = rows
         self.by_id = {r["CellID"]: r for r in rows}
         self.fluor_raw = raw
@@ -456,15 +498,83 @@ SAVED FILE
         self.vs = 1.0 / step
         s = g[::step, ::step].astype(np.float32)
         lo, hi = np.percentile(s, [1, 99.5])
-        if hi > lo:
-            s = np.clip((s - lo) / (hi - lo), 0, 1) * 255
-        self.base_rgb = np.stack([s.astype(np.uint8)] * 3, axis=-1)
+        self.fl_small = (np.clip((s - lo) / (hi - lo), 0, 1) if hi > lo
+                         else np.zeros_like(s))
+
+        # brightfield at the same display scale, 0..1
+        self.bf_small = None
+        bf = getattr(self, "_bf_raw", None)
+        if bf is not None:
+            try:
+                if bf.ndim == 3 and bf.shape[-1] in (3, 4):
+                    bf = bf[..., :3].mean(axis=-1)
+                elif bf.ndim == 3:
+                    bf = bf.max(axis=0)
+                b = bf[::step, ::step].astype(np.float32)
+                if b.shape != s.shape:
+                    b = np.array(Image.fromarray(b, mode="F").resize(
+                        (s.shape[1], s.shape[0]), Image.BILINEAR))
+                blo, bhi = np.percentile(b, [1, 99])
+                if bhi > blo:
+                    self.bf_small = np.clip((b - blo) / (bhi - blo), 0, 1)
+            except Exception:
+                self.bf_small = None
+        self._bf_raw = None                      # full-size copy no longer needed
+        self._compose_base()
+
         small = self.labels[::step, ::step]
         from scipy import ndimage
         er = ndimage.grey_erosion(small, size=(3, 3))
         em = (small > 0) & (small != er)
         self.edge_yx = np.nonzero(em)
         self.edge_ids = small[em]
+
+    # ------------------------------------------------------------ display ---
+    def _compose_base(self):
+        """
+        Build the picture shown on screen from the stretched green channel.
+
+        Green fluorescence    calcein in green on black, like the microscope
+        Green on brightfield  brightfield in grey with the calcein added in
+                              green on top - borders and nucleus visible
+        Grey                  the previous look
+
+        Brightness multiplies the stretched signal before display. None of this
+        touches the measurement, which always uses the raw green channel.
+        """
+        if getattr(self, "fl_small", None) is None:
+            return
+        f = np.clip(self.fl_small * float(self.gain_var.get()), 0, 1)
+        view = self.view_var.get()
+        if view.startswith("Green on") and self.bf_small is not None:
+            b = self.bf_small * 0.55
+            rgb = np.stack([b, np.clip(b + f, 0, 1), b], axis=-1)
+        elif view.startswith("Grey"):
+            rgb = np.stack([f, f, f], axis=-1)
+        else:
+            rgb = np.zeros(f.shape + (3,), np.float32)
+            rgb[..., 1] = f
+        self.base_rgb = (rgb * 255).astype(np.uint8)
+
+    def _recompose(self):
+        if getattr(self, "fl_small", None) is None:
+            return
+        if self.view_var.get().startswith("Green on") and self.bf_small is None:
+            self.status.config(text="No brightfield image found for this sample - "
+                                    "showing green fluorescence only.")
+        self._compose_base()
+        self._redraw()
+
+    def _cycle_view(self):
+        i = VIEWS.index(self.view_var.get()) if self.view_var.get() in VIEWS else 0
+        self.view_var.set(VIEWS[(i + 1) % len(VIEWS)])
+        self._recompose()
+
+    def _cls_color(self, cls):
+        """Outline/marker colour; released turns light blue on green views."""
+        if cls == "released" and not self.view_var.get().startswith("Grey"):
+            return RELEASED_ON_GREEN
+        return CLASS_COLORS.get(cls, (255, 255, 255))
 
     # -------------------------------------------------------- classify ---
     def _cfg(self):
@@ -581,7 +691,8 @@ SAVED FILE
             if self.blind.get() and not self.reveal.get():
                 sub[vy, vx] = OUTLINE_NEUTRAL     # outlines, no answer
             else:
-                for cls, col in CLASS_COLORS.items():
+                for cls in CLASS_COLORS:
+                    col = self._cls_color(cls)
                     sel = np.fromiter(
                         (self.cls_by_id.get(int(i), "") == cls for i in vid),
                         dtype=bool, count=len(vid))
@@ -602,7 +713,7 @@ SAVED FILE
             px = (r["CentroidX"] * self.vs - x0) * self.zoom
             py = (r["CentroidY"] * self.vs - y0) * self.zoom
             if -20 < px < dw + 20 and -20 < py < dh + 20:
-                col = CLASS_COLORS.get(info["label"], (255, 255, 255))
+                col = self._cls_color(info["label"])
                 d.ellipse([px - 5, py - 5, px + 5, py + 5],
                           fill=col, outline=(255, 255, 255))
         for a in self.added:
@@ -628,7 +739,8 @@ SAVED FILE
         self.status.config(
             text=f"zoom {self.zoom*100:.0f}%   "
                  f"{'BLIND - outlines only' if (self.blind.get() and not self.reveal.get()) else 'showing classification'}"
-                 "   |  wheel zoom · middle-drag pan · R/N/X/S label · M missed · B blind")
+                 f"{'' if self.view_var.get().startswith('Grey') or (self.blind.get() and not self.reveal.get()) else ' (released = blue outline, not = red)'}"
+                 "   |  wheel zoom · middle-drag pan · R/N/X/S label · M missed · B blind · V view")
 
     # ---------------------------------------------------------- picking ---
     def _at(self, ex, ey):
