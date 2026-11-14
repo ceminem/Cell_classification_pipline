@@ -180,17 +180,20 @@ class CargoGUI:
         self.tab_settings = ttk.Frame(nb)
         self.tab_labels = ttk.Frame(nb)
         self.tab_plot = ttk.Frame(nb)
+        self.tab_cnn = ttk.Frame(nb)
         self.tab_setup = ttk.Frame(nb)
         nb.add(self.tab_run, text="  Run  ")
         nb.add(self.tab_labels, text="  Sample names  ")
         nb.add(self.tab_settings, text="  Settings  ")
         nb.add(self.tab_plot, text="  Figures  ")
+        nb.add(self.tab_cnn, text="  CNN  ")
         nb.add(self.tab_setup, text="  Setup check  ")
 
         self._build_run_tab()
         self._build_settings_tab()
         self._build_labels_tab()
         self._build_plot_tab()
+        self._build_cnn_tab()
         self._build_setup_tab()
 
     def _build_run_tab(self):
@@ -1171,13 +1174,370 @@ class CargoGUI:
         except OSError as exc:
             messagebox.showerror(APP_TITLE, str(exc))
 
+    # ================================================================ CNN ===
+    # The CNN tab runs cargo_cnn.train / cargo_cnn.predict as subprocesses with
+    # sys.executable - the SAME Python this window runs in. "Cargo Analysis.bat"
+    # starts the window in the best GPU environment, so training and
+    # classification use the GPU without activating any environment by hand.
+
+    CNN_LENGTHS = [("quick test  (15 epochs, minutes)", 15),
+                   ("normal  (60 epochs, recommended)", 60),
+                   ("thorough  (120 epochs)", 120)]
+
+    def _build_cnn_tab(self):
+        f = self.tab_cnn
+        self.cnn_queue = queue.Queue()
+        self.cnn_proc = None
+
+        top = ttk.Frame(f)
+        top.pack(fill="x", padx=8, pady=(8, 2))
+        ttk.Label(top, justify="left", wraplength=820, foreground="#444",
+                  text="A neural network that learns 'released' vs 'not released' "
+                       "from cells YOU labelled blind, by looking at each cell's "
+                       "picture instead of two numbers. Optional: the normal "
+                       "analysis is unchanged. Work through 1 -> 2 -> 3.")\
+            .pack(anchor="w")
+        self.cnn_dev_lbl = ttk.Label(top, text="Compute device: checking...",
+                                     foreground="#666")
+        self.cnn_dev_lbl.pack(anchor="w", pady=(4, 0))
+        threading.Thread(target=self._cnn_detect_device, daemon=True).start()
+
+        # ---- 1. label ----
+        b1 = ttk.LabelFrame(f, text="1. Label cells  (curation tool)")
+        b1.pack(fill="x", padx=8, pady=4)
+        r = ttk.Frame(b1)
+        r.pack(fill="x", padx=6, pady=4)
+        ttk.Button(r, text="Open curation tool...",
+                   command=self._cnn_open_curator).pack(side="left")
+        ttk.Label(r, justify="left", foreground="#666", font=("Segoe UI", 8),
+                  text="Pick a SAMPLE folder (e.g. ...\\A1) that has been analysed. "
+                       "Press B for blind mode, label with R / N under the mouse,\n"
+                       "then 'Save labels'. Aim for 100+ cells per field and at least "
+                       "3 fields from different images.").pack(side="left", padx=8)
+
+        # ---- 2. train ----
+        b2 = ttk.LabelFrame(f, text="2. Train a model")
+        b2.pack(fill="x", padx=8, pady=4)
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=(4, 0))
+        ttk.Label(r, text="Folders with labelled samples (searched with all subfolders):")\
+            .pack(side="left")
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=2)
+        self.cnn_folders = tk.Listbox(r, height=3, font=("Consolas", 8))
+        self.cnn_folders.pack(side="left", fill="x", expand=True)
+        bcol = ttk.Frame(r)
+        bcol.pack(side="left", padx=4)
+        ttk.Button(bcol, text="Add folder...", command=self._cnn_add_folder).pack(fill="x")
+        ttk.Button(bcol, text="Remove", command=lambda: [
+            self.cnn_folders.delete(i) for i in reversed(self.cnn_folders.curselection())])\
+            .pack(fill="x", pady=2)
+
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=2)
+        ttk.Label(r, text="Results folder (optional):").pack(side="left")
+        self.cnn_results_var = tk.StringVar()
+        ttk.Entry(r, textvariable=self.cnn_results_var).pack(
+            side="left", fill="x", expand=True, padx=4)
+        ttk.Button(r, text="Browse...", command=lambda: self._cnn_pick_dir(
+            self.cnn_results_var, "Folder the pipeline saved results to")).pack(side="left")
+        ToolTip(r, "Only needed if you ran the analysis with 'Save results to'.\n"
+                   "The results files let training compare the CNN with the\n"
+                   "rule and check the labels still fit the current masks.")
+
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=4)
+        ttk.Label(r, text="Training length:").pack(side="left")
+        self.cnn_len_var = tk.StringVar(value=self.CNN_LENGTHS[1][0])
+        ttk.Combobox(r, textvariable=self.cnn_len_var, state="readonly", width=34,
+                     values=[x[0] for x in self.CNN_LENGTHS]).pack(side="left", padx=6)
+        self.cnn_train_btn = ttk.Button(r, text="Train model", command=self._cnn_train)
+        self.cnn_train_btn.pack(side="right")
+
+        # ---- 3. classify ----
+        b3 = ttk.LabelFrame(f, text="3. Classify samples with a trained model")
+        b3.pack(fill="x", padx=8, pady=4)
+        r = ttk.Frame(b3)
+        r.pack(fill="x", padx=6, pady=4)
+        ttk.Label(r, text="Model:").pack(side="left")
+        self.cnn_model_var = tk.StringVar()
+        self.cnn_model_cb = ttk.Combobox(r, textvariable=self.cnn_model_var,
+                                         state="readonly", width=70)
+        self.cnn_model_cb.pack(side="left", padx=6)
+        ttk.Button(r, text="Refresh", command=self._cnn_refresh_models).pack(side="left")
+        r = ttk.Frame(b3)
+        r.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Label(r, justify="left", foreground="#666", font=("Segoe UI", 8),
+                  text="Uses the parent folder, the ticked samples and 'Save results "
+                       "to' from the Run tab.\nRun the normal analysis on them first - "
+                       "the CNN reuses its cell masks.").pack(side="left")
+        self.cnn_pred_btn = ttk.Button(r, text="Classify ticked samples",
+                                       command=self._cnn_predict)
+        self.cnn_pred_btn.pack(side="right")
+
+        r = ttk.Frame(f)
+        r.pack(fill="x", padx=8, pady=2)
+        self.cnn_stop_btn = ttk.Button(r, text="Stop", command=self._cnn_stop,
+                                       state="disabled")
+        self.cnn_stop_btn.pack(side="left")
+        ttk.Button(r, text="Open training report", command=self._cnn_open_report)\
+            .pack(side="left", padx=6)
+        ttk.Button(r, text="Open models folder", command=lambda: self._open_path(
+            os.path.join(self.script_dir, "models"))).pack(side="left")
+        self.cnn_status = ttk.Label(r, text="", foreground="#666")
+        self.cnn_status.pack(side="right")
+
+        self.cnn_log = scrolledtext.ScrolledText(f, height=10, wrap="word",
+                                                 font=("Consolas", 9))
+        self.cnn_log.pack(fill="both", expand=True, padx=8, pady=(2, 8))
+        self.cnn_log.tag_config("err", foreground="#c00000")
+        self.cnn_log.tag_config("ok", foreground="#008000")
+        self.cnn_log.tag_config("warn", foreground="#b06000")
+
+        self._cnn_refresh_models()
+        self.root.after(150, self._cnn_poll)
+
+    # ---- helpers ----
+    def _cnn_detect_device(self):
+        """Ask torch which device training will use. Runs in a thread because
+        importing torch takes a few seconds; the label is updated on the Tk
+        thread via after()."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                kind = "AMD ROCm" if getattr(torch.version, "hip", None) else "NVIDIA CUDA"
+                txt = (f"Compute device: GPU - {torch.cuda.get_device_name(0)} "
+                       f"({kind}).  Training takes seconds to a few minutes.")
+                col = "#008000"
+            else:
+                txt = ("Compute device: CPU only - works, but training takes "
+                       "several minutes. Start the program with 'Cargo Analysis.bat' "
+                       "so it picks your GPU environment.")
+                col = "#b06000"
+        except ImportError:
+            txt, col = ("Compute device: torch is not installed in this Python "
+                        "environment - the CNN tab cannot run.", "#c00000")
+        except Exception as exc:
+            txt, col = f"Compute device: could not be checked ({exc})", "#b06000"
+        # never touch widgets from this thread - hand the result to _cnn_poll
+        self.cnn_queue.put(("__DEVICE__", txt, col))
+
+    def _cnn_pick_dir(self, var, title):
+        d = filedialog.askdirectory(title=title)
+        if d:
+            var.set(os.path.normpath(d))
+
+    def _cnn_add_folder(self):
+        start = self.parent_var.get().strip() or None
+        d = filedialog.askdirectory(title="Folder containing labelled samples",
+                                    initialdir=start)
+        if d and os.path.normpath(d) not in self.cnn_folders.get(0, "end"):
+            self.cnn_folders.insert("end", os.path.normpath(d))
+
+    def _cnn_open_curator(self):
+        start = self.parent_var.get().strip() or None
+        d = filedialog.askdirectory(title="Choose a SAMPLE folder to label (e.g. ...\\A1)",
+                                    initialdir=start)
+        if not d:
+            return
+        script = os.path.join(self.script_dir, "cargo_curate.py")
+        if not os.path.isfile(script):
+            messagebox.showerror(APP_TITLE, "cargo_curate.py is not next to this program.")
+            return
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        subprocess.Popen([sys.executable, script, os.path.normpath(d)],
+                         cwd=self.script_dir, creationflags=flags)
+        self.cnn_status.config(text="curation tool opened in its own window")
+
+    def _cnn_models(self):
+        """Trained models, newest first, with a one-line description each."""
+        import glob
+        out = []
+        for p in sorted(glob.glob(os.path.join(self.script_dir, "models", "cnn_*",
+                                               "model.pt")), reverse=True):
+            desc = os.path.basename(os.path.dirname(p))
+            try:
+                with open(os.path.join(os.path.dirname(p), "model_info.json"),
+                          encoding="utf-8") as fh:
+                    meta = json.load(fh)
+                n = sum(t["n"] for t in meta.get("trained_on", []))
+                desc = f"{meta.get('created', '')[:16].replace('T', ' ')}  -  {n} cells"
+                cv = meta.get("cv") or []
+                nn = sum(c["n"] for c in cv)
+                if nn:
+                    cnn = sum(c["cnn_acc"] * c["n"] for c in cv) / nn
+                    desc += f"  -  held-out accuracy {cnn * 100:.1f}%"
+                    rr = [c for c in cv if c.get("rule_acc") is not None]
+                    if rr:
+                        rule = sum(c["rule_acc"] * c["n"] for c in rr) / sum(c["n"] for c in rr)
+                        desc += f" (rule {rule * 100:.1f}%)"
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            out.append((desc, p))
+        return out
+
+    def _cnn_refresh_models(self):
+        self._cnn_model_list = self._cnn_models()
+        names = [d for d, _ in self._cnn_model_list]
+        self.cnn_model_cb.config(values=names)
+        if names:
+            if self.cnn_model_var.get() not in names:
+                self.cnn_model_var.set(names[0])
+        else:
+            self.cnn_model_var.set("(no trained model yet - do step 2)")
+
+    def _cnn_selected_model(self):
+        for d, p in getattr(self, "_cnn_model_list", []):
+            if d == self.cnn_model_var.get():
+                return p
+        return None
+
+    def _cnn_open_report(self):
+        p = self._cnn_selected_model()
+        rep = os.path.join(os.path.dirname(p), "training_report.txt") if p else None
+        if not rep or not os.path.isfile(rep):
+            messagebox.showinfo(APP_TITLE, "No trained model selected yet.")
+            return
+        self._open_path(rep)
+
+    def _open_path(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
+        try:
+            if os.name == "nt":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"Could not open: {exc}")
+
+    # ---- actions ----
+    def _cnn_train(self):
+        folders = list(self.cnn_folders.get(0, "end"))
+        if not folders:
+            messagebox.showinfo(APP_TITLE, "Add at least one folder that contains "
+                                           "labelled samples (step 2, 'Add folder...').")
+            return
+        epochs = dict(self.CNN_LENGTHS).get(self.cnn_len_var.get(), 60)
+        cmd = [sys.executable, "-u", "-m", "cargo_cnn.train",
+               "--epochs", str(epochs), "--data"] + folders
+        extra = [x for x in (self.cnn_results_var.get().strip(),
+                             self.output_var.get().strip()) if x]
+        if extra:
+            cmd += ["--results"] + extra
+        self._cnn_start(cmd, "training")
+
+    def _cnn_predict(self):
+        model = self._cnn_selected_model()
+        if not model:
+            messagebox.showinfo(APP_TITLE, "Train a model first (step 2).")
+            return
+        parent = self.parent_var.get().strip()
+        if not os.path.isdir(parent):
+            messagebox.showinfo(APP_TITLE, "Choose the parent folder on the Run tab first.")
+            return
+        chosen = [s for s, v in self.sample_vars.items() if v.get()]
+        if not chosen:
+            messagebox.showinfo(APP_TITLE, "Tick the samples to classify on the Run tab.")
+            return
+        cmd = [sys.executable, "-u", "-m", "cargo_cnn.predict", "--model", model,
+               "--parent", parent, "--samples", ",".join(chosen)]
+        out = self.output_var.get().strip()
+        if out:
+            cmd += ["--output", out]
+        self.last_parent = parent
+        self._cnn_start(cmd, "classifying")
+
+    def _cnn_start(self, cmd, what):
+        if self.cnn_proc and self.cnn_proc.poll() is None:
+            messagebox.showinfo(APP_TITLE, "Something is already running in this tab.")
+            return
+        self.cnn_log.delete("1.0", "end")
+        self.cnn_log.insert("end", f"$ {' '.join(cmd)}\n\n")
+        for b in (self.cnn_train_btn, self.cnn_pred_btn):
+            b.config(state="disabled")
+        self.cnn_stop_btn.config(state="normal")
+        self.cnn_status.config(text=f"{what}...")
+
+        def work():
+            try:
+                env = dict(os.environ, PYTHONIOENCODING="utf-8")
+                flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                self.cnn_proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    bufsize=1, encoding="utf-8", errors="replace",
+                    cwd=self.script_dir, creationflags=flags, env=env)
+                for line in self.cnn_proc.stdout:
+                    self.cnn_queue.put(line)
+                self.cnn_proc.wait()
+                self.cnn_queue.put(("__DONE__", self.cnn_proc.returncode, what))
+            except Exception:
+                self.cnn_queue.put(traceback.format_exc())
+                self.cnn_queue.put(("__DONE__", -1, what))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _cnn_stop(self):
+        if self.cnn_proc and self.cnn_proc.poll() is None:
+            self.cnn_proc.terminate()
+            self.cnn_log.insert("end", "\n[stopped by user]\n", "warn")
+
+    def _cnn_poll(self):
+        try:
+            while True:
+                item = self.cnn_queue.get_nowait()
+                if isinstance(item, tuple) and item and item[0] == "__DEVICE__":
+                    self.cnn_dev_lbl.config(text=item[1], foreground=item[2])
+                elif isinstance(item, tuple) and item and item[0] == "__DONE__":
+                    _, code, what = item
+                    for b in (self.cnn_train_btn, self.cnn_pred_btn):
+                        b.config(state="normal")
+                    self.cnn_stop_btn.config(state="disabled")
+                    if code == 0:
+                        self.cnn_status.config(text=f"{what} finished")
+                        self.cnn_log.insert("end", "\nFinished.\n", "ok")
+                        if what == "training":
+                            self._cnn_refresh_models()
+                            self.cnn_log.insert(
+                                "end", "The new model is selected in step 3. Read the "
+                                       "VERDICT above before using it.\n", "ok")
+                    else:
+                        self.cnn_status.config(text=f"{what} stopped (exit {code})")
+                        self.cnn_log.insert("end", f"\nExited with code {code}.\n", "err")
+                    self.cnn_log.see("end")
+                else:
+                    s = str(item)
+                    low = s.lower()
+                    tag = ("err" if ("error" in low or "traceback" in low) else
+                           "ok" if "verdict: the cnn beats" in low else
+                           "warn" if ("verdict" in low or "warning" in low
+                                      or low.lstrip().startswith("!")) else None)
+                    self.cnn_log.insert("end", s, tag or ())
+                    self.cnn_log.see("end")
+        except queue.Empty:
+            pass
+        self.root.after(150, self._cnn_poll)
+
+    # ============================================================== setup ===
     def _build_setup_tab(self):
         f = self.tab_setup
+        self.setup_queue = queue.Queue()
+        self.root.after(120, self._setup_poll)
         ttk.Label(f,
                   text="Checks that everything the pipeline needs is present and working.\n"
                        "Run this first on any new machine.",
                   justify="left").pack(anchor="w", padx=10, pady=8)
-        ttk.Button(f, text="Run setup check", command=self._setup_check).pack(anchor="w", padx=10)
+        r = ttk.Frame(f)
+        r.pack(fill="x", padx=10)
+        ttk.Button(r, text="Run setup check", command=self._setup_check).pack(side="left")
+        ub = ttk.Button(r, text="Get latest version from GitHub",
+                        command=self._update_from_git)
+        ub.pack(side="left", padx=8)
+        ToolTip(ub, "Downloads the newest version of these scripts (git pull).\n"
+                    "Your data and settings are not touched. Restart the\n"
+                    "program afterwards.")
         self.setup_log = scrolledtext.ScrolledText(f, height=24, wrap="word",
                                                    font=("Consolas", 9))
         self.setup_log.pack(fill="both", expand=True, padx=10, pady=8)
@@ -1427,11 +1787,25 @@ class CargoGUI:
     # -------------------------------------------------------- setup check ---
     def _setup_check(self):
         self.setup_log.delete("1.0", "end")
+        # read Tk variables HERE, on the Tk thread; the worker must not
+        self._setup_fiji = self.fiji_var.get().strip()
         threading.Thread(target=self._setup_worker, daemon=True).start()
 
     def _sput(self, text, tag=None):
-        self.setup_log.insert("end", text + "\n", tag or ())
-        self.setup_log.see("end")
+        """Queue a line for the setup log. Called from worker threads, so it
+        must not touch the widget itself - _setup_poll writes it on the Tk
+        thread (tkinter is not thread-safe)."""
+        self.setup_queue.put((text, tag))
+
+    def _setup_poll(self):
+        try:
+            while True:
+                text, tag = self.setup_queue.get_nowait()
+                self.setup_log.insert("end", text + "\n", tag or ())
+                self.setup_log.see("end")
+        except queue.Empty:
+            pass
+        self.root.after(120, self._setup_poll)
 
     def _setup_worker(self):
         ok, bad = "ok", "err"
@@ -1463,7 +1837,7 @@ class CargoGUI:
 
         # Fiji
         self._sput("")
-        fiji_dir = self.fiji_var.get().strip()
+        fiji_dir = getattr(self, "_setup_fiji", "")
         if not fiji_dir:
             self._sput("Fiji folder not set (Settings tab).", bad)
         elif not os.path.isdir(fiji_dir):
@@ -1521,7 +1895,72 @@ class CargoGUI:
         self._sput("If a tab you expect is missing, check that THIS file is the "
                    "one you copied from the package.", "warn")
 
+        # CNN + version
+        self._sput("")
+        try:
+            import importlib
+            importlib.import_module("cargo_cnn.model")
+            self._sput("  cargo_cnn        found (CNN tab available)", ok)
+        except ImportError as exc:
+            self._sput(f"  cargo_cnn        NOT usable ({exc})", "warn")
+        try:
+            import cargo_version
+            g = cargo_version.git_state(self.script_dir)
+            if g:
+                self._sput(f"Code version: {g['describe']}"
+                           + ("  - with UNCOMMITTED EDITS" if g["dirty"] else ""),
+                           "warn" if g["dirty"] else ok)
+            else:
+                self._sput("Code version: not a git checkout (updates must be "
+                           "copied by hand - see GETTING_STARTED.md)", "warn")
+        except Exception:
+            pass
+
         self._sput("\nDone. Anything red must be fixed before running.", "warn")
+
+    def _update_from_git(self):
+        """git pull in the program folder, with the result in plain words."""
+        if not os.path.isdir(os.path.join(self.script_dir, ".git")):
+            messagebox.showinfo(
+                APP_TITLE,
+                "This folder was not downloaded with git, so it cannot update "
+                "itself.\n\nSee GETTING_STARTED.md: clone the repository once with "
+                "GitHub Desktop, then this button works.")
+            return
+        self.setup_log.delete("1.0", "end")
+        self._sput("Getting the latest version from GitHub...\n")
+
+        def work():
+            try:
+                import cargo_version
+                git = cargo_version.find_git()
+                if not git:
+                    raise FileNotFoundError("git")
+                flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                p = subprocess.run([git, "pull", "--ff-only"], cwd=self.script_dir,
+                                   capture_output=True, text=True, timeout=120,
+                                   creationflags=flags)
+                out = (p.stdout + p.stderr).strip()
+                if p.returncode == 0 and "Already up to date" in out:
+                    msg, tag = "You already have the latest version.", "ok"
+                elif p.returncode == 0:
+                    msg, tag = ("Updated. CLOSE AND RESTART the program to use the "
+                                "new version."), "ok"
+                elif "local changes" in out or "would be overwritten" in out:
+                    msg, tag = ("Not updated: you edited some of these files yourself. "
+                                "Commit or discard those edits in GitHub Desktop, "
+                                "then try again."), "err"
+                else:
+                    msg, tag = "Update failed - details above.", "err"
+            except FileNotFoundError:
+                out, msg, tag = "", ("git is not installed. Use GitHub Desktop: "
+                                     "'Fetch origin', then 'Pull origin'."), "err"
+            except Exception as exc:
+                out, msg, tag = "", f"Update failed: {exc}", "err"
+            self._sput(out)
+            self._sput("\n" + msg, tag)
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------------------------------------------------------- settings ---
     def _save_settings(self):
