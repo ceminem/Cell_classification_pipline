@@ -108,39 +108,81 @@ def balanced_bce(p, y):
     return float(np.mean(parts)) if parts else float("nan")
 
 
-def split_for_stopping(train_ex, seed=0):
+def split_for_stopping(train_ex, seed=0, fraction=0.15):
     """
-    Set aside part of the TRAINING data to decide when to stop.
+    Set aside part of the TRAINING cells to decide when to stop - never test
+    cells, which would let the test choose the model and inflate its score.
 
-    Never the test field - that would let the test choose the model and
-    inflate its score. Preferably a whole training field, because the
-    overfitting seen in practice is to the look of particular images (the
-    held-out FIELD got worse while the training cells were learned
-    perfectly); cells from the same images would not show it. The smallest
-    field with at least 5 cells of each class is chosen, to lose as little
-    training data as possible. With fewer than 3 training fields a
-    stratified 20% of cells is used instead.
+    About 15% of the cells of EVERY training field, separately for released
+    and not released, so every condition and both classes stay in training
+    and are represented in the stopping set.
+
+    (A first version set aside a whole training field. On real data, where
+    each field is a different condition, that removed a whole condition from
+    training - one round trained on only 242 of 441 cells - and the stopping
+    signal was erratic: chosen epochs 9, 51, 17, 17.)
 
     Returns (train_part, stop_part, description).
     """
-    groups = sorted({e["group"] for e in train_ex})
-    if len(groups) >= 3:
-        def counts(g):
-            ys = [e["y"] for e in train_ex if e["group"] == g]
-            return len(ys), sum(ys), len(ys) - sum(ys)
-        ok = [g for g in groups if counts(g)[1] >= 5 and counts(g)[2] >= 5]
-        if ok:
-            g = min(ok, key=lambda g: counts(g)[0])
-            return ([e for e in train_ex if e["group"] != g],
-                    [e for e in train_ex if e["group"] == g], f"field {g}")
     rng = np.random.default_rng(seed)
     stop_idx = set()
-    for c in (0, 1):
-        idx = [i for i, e in enumerate(train_ex) if e["y"] == c]
-        rng.shuffle(idx)
-        stop_idx.update(idx[:max(1, int(round(0.2 * len(idx))))])
+    for g in sorted({e["group"] for e in train_ex}):
+        for c in (0, 1):
+            idx = [i for i, e in enumerate(train_ex) if e["group"] == g and e["y"] == c]
+            if len(idx) < 4:
+                continue                    # too few to spare any
+            rng.shuffle(idx)
+            stop_idx.update(idx[:max(1, int(round(fraction * len(idx))))])
     return ([e for i, e in enumerate(train_ex) if i not in stop_idx],
-            [e for i, e in enumerate(train_ex) if i in stop_idx], "20% of training cells")
+            [e for i, e in enumerate(train_ex) if i in stop_idx],
+            f"{int(fraction * 100)}% of the cells of every training field")
+
+
+def fit_brightness_threshold(train_ex):
+    """
+    The simplest possible classifier, as a yardstick: one brightness
+    threshold (MeanWhole >= t -> released), chosen on the TRAINING cells to
+    maximise balanced accuracy, then applied unchanged to the test cells.
+    It is fitted exactly like the CNN - on the same cells - so the
+    comparison is fair, and it needs no results files.
+    """
+    v = np.array([e["mean_whole"] for e in train_ex], float)
+    y = np.array([e["y"] for e in train_ex], int)
+    best = (-1.0, float(np.median(v)) if len(v) else 25.7)
+    for t in np.unique(v):
+        b = scores(v >= t, y)["bal_acc"]
+        if np.isfinite(b) and b > best[0]:
+            best = (b, float(t))
+    return best[1]
+
+
+def make_folds(ex, design, seed=0):
+    """
+    Two ways to ask "how good is it on cells it never saw":
+
+    fields  leave one FIELD out. Each round, one whole image is the test.
+            When every field is a different condition (as here), this asks
+            "does it work on a CONDITION it has never seen?" - the harder
+            question, relevant if it will be used on new conditions.
+    halves  split EVERY field into a left and a right half at the median
+            cell position; train on all left halves, test on all right halves,
+            then the reverse. Every condition is seen in training, the test
+            cells are not. This is the normal use: new images/wells of the
+            conditions that were labelled.
+
+    Returns a list of (name, test_indices).
+    """
+    groups = sorted({e["group"] for e in ex})
+    if design == "halves":
+        med = {g: float(np.median([e["cx"] for e in ex if e["group"] == g])) for g in groups}
+        left = [i for i, e in enumerate(ex) if e["cx"] < med[e["group"]]]
+        right = [i for i, e in enumerate(ex) if e["cx"] >= med[e["group"]]]
+        return [("left halves of all fields", left), ("right halves of all fields", right)]
+    if len(groups) >= 3:
+        return [(g, [i for i, e in enumerate(ex) if e["group"] == g]) for g in groups]
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(len(ex))
+    return [(f"random fold {k + 1}", list(idx[k::5])) for k in range(5)]
 
 
 def train_model(train_ex, args, device, log, seed=0, show_ex=None, stop_ex=None,
@@ -311,6 +353,9 @@ def main(argv=None):
     ap.add_argument("--include-nonblind", action="store_true",
                     help="also use labels made with the colours visible (not advised)")
     ap.add_argument("--no-cv", action="store_true", help="skip cross-validation")
+    ap.add_argument("--cv", choices=["both", "halves", "fields"], default="both",
+                    help="test design: halves = same conditions, unseen cells; "
+                         "fields = leave one field (condition) out; both (default)")
     ap.add_argument("--no-early-stop", action="store_true",
                     help="train every fold for the full number of epochs")
     ap.add_argument("--patience", type=int, default=15,
@@ -375,102 +420,111 @@ def main(argv=None):
     log(f"network: {n_parameters(CellNet(width=args.width)):,} parameters")
 
     # ---- cross-validation ----
+    def pct(sc, k):
+        return (sc[k] * 100) if (sc and np.isfinite(sc.get(k, np.nan))) else float("nan")
+
     cv_rows = []
-    fold_table = []
     best_epochs = []
+    meta_cv = []
+    designs = {"both": ["halves", "fields"], "halves": ["halves"],
+               "fields": ["fields"]}[args.cv]
     if not args.no_cv:
-        if len(groups) >= 3:
-            folds = [[g] for g in groups]
-            log(f"\nCROSS-VALIDATION: leave one field out ({len(folds)} folds)")
-        else:
-            log("\nCROSS-VALIDATION: only 1-2 labelled fields, so whole fields "
-                "cannot be held out.\n  Falling back to 5 random folds of CELLS. "
-                "This OVERESTIMATES accuracy on a new\n  experiment - label a "
-                "third field before trusting the number.")
-            rng = np.random.default_rng(args.seed)
-            idx = rng.permutation(len(ex))
-            folds = [list(idx[i::5]) for i in range(5)]
-        for fi, fold in enumerate(folds):
-            if len(groups) >= 3:
-                test = [e for e in ex if e["group"] in fold]
-                train = [e for e in ex if e["group"] not in fold]
-                name = fold[0]
+        for design in designs:
+            folds = make_folds(ex, design, args.seed)
+            if design == "halves":
+                log("\nTEST A - SAME CONDITIONS, UNSEEN CELLS: every field split into a "
+                    "left and a right half;\n  train on one half of every field, test on "
+                    "the other half, then swap.\n  This is the normal use: new images of "
+                    "conditions that were labelled.")
+            elif len(groups) >= 3:
+                log(f"\nTEST B - UNSEEN CONDITION: leave one field out ({len(folds)} rounds)."
+                    "\n  Each field is a different condition here, so this asks whether it "
+                    "works on a\n  condition it has NEVER seen - the harder question.")
             else:
-                fs = set(fold)
-                test = [e for i, e in enumerate(ex) if i in fs]
-                train = [e for i, e in enumerate(ex) if i not in fs]
-                name = f"random fold {fi + 1}"
-            if len(train) < 20 or not test:
+                log("\nTEST B: only 1-2 labelled fields, so whole fields cannot be held out;"
+                    "\n  using 5 random folds of cells instead (optimistic).")
+            rows_d = []
+            for fi, (name, test_idx) in enumerate(folds):
+                ts = set(test_idx)
+                test = [ex[i] for i in test_idx]
+                train = [e for i, e in enumerate(ex) if i not in ts]
+                if len(train) < 20 or not test:
+                    continue
+                log(f"  [{fi + 1}/{len(folds)}] test = {name} ({len(test)} cells), "
+                    f"train = {len(train)} cells")
+                stop = None
+                if not args.no_early_stop:
+                    train, stop, how = split_for_stopping(train, seed=args.seed + fi)
+                    log(f"      early-stopping set: {how} ({len(stop)} cells); "
+                        f"training on {len(train)}")
+                thr = fit_brightness_threshold(train + (stop or []))
+                m, best_ep = train_model(train, args, device, log, seed=args.seed + fi,
+                                         show_ex=test, stop_ex=stop)
+                best_epochs.append(best_ep)
+                p = predict(m, test, device, tta=True)
+                log(f"      brightness yardstick for this round: threshold {thr:.1f} "
+                    "(learned on the same training cells)")
+                for e, pi in zip(test, p):
+                    rows_d.append({"design": design, "field": e["group"],
+                                   "CellID": e["cell_id"], "label": e["y"],
+                                   "p_cnn": round(float(pi), 4), "cnn": int(pi >= 0.5),
+                                   "bright": int(e["mean_whole"] >= thr),
+                                   "rule": "" if e["rule"] is None else e["rule"],
+                                   "MeanWhole": round(e["mean_whole"], 3)})
+            if not rows_d:
                 continue
-            log(f"  [{fi + 1}/{len(folds)}] test = {name} ({len(test)} cells), "
-                f"train = {len(train)} cells")
-            stop = None
-            if not args.no_early_stop:
-                train, stop, how = split_for_stopping(train, seed=args.seed + fi)
-                log(f"      early-stopping set: {how} ({len(stop)} cells); "
-                    f"training on {len(train)}")
-            m, best_ep = train_model(train, args, device, log, seed=args.seed + fi,
-                                     show_ex=test, stop_ex=stop)
-            best_epochs.append(best_ep)
-            p = predict(m, test, device, tta=True)
-            yt = [e["y"] for e in test]
-            s_cnn = scores(p >= 0.5, yt)
-            ruled = [(e["rule"], e["y"]) for e in test if e["rule"] is not None]
-            s_rule = scores([r for r, _ in ruled], [t for _, t in ruled]) if ruled else None
-            fold_table.append((name, s_cnn, s_rule, auc(p, yt)))
-            for e, pi in zip(test, p):
-                cv_rows.append({"field": e["group"], "CellID": e["cell_id"],
-                                "label": e["y"], "p_cnn": round(float(pi), 4),
-                                "cnn": int(pi >= 0.5),
-                                "rule": "" if e["rule"] is None else e["rule"],
-                                "MeanWhole": round(e["mean_whole"], 3)})
+            cv_rows += rows_d
 
-        # ---- summary ----
-        log("\nRESULT ON HELD-OUT CELLS  (balanced = mean of the hit rates for "
-            "released and\n  for not released; it cannot be inflated by labelling "
-            "mostly one kind)")
-        log(f"  {'field':<28} {'n':>5} {'CNN bal.':>9} {'rule bal.':>10} "
-            f"{'CNN acc':>8} {'rule acc':>9}")
-
-        def pct(sc, k):
-            return (sc[k] * 100) if (sc and np.isfinite(sc.get(k, np.nan))) else float("nan")
-
-        for name, sc, sr, a in fold_table:
-            log(f"  {name[-28:]:<28} {sc['n']:>5} {pct(sc, 'bal_acc'):>8.1f}% "
-                f"{pct(sr, 'bal_acc'):>9.1f}% {pct(sc, 'acc'):>7.1f}% {pct(sr, 'acc'):>8.1f}%")
-        yy = np.array([r["label"] for r in cv_rows])
-        pp = np.array([r["p_cnn"] for r in cv_rows])
-        s_cnn = scores(pp >= 0.5, yy)
-        both = [r for r in cv_rows if r["rule"] != ""]
-        s_rule = scores([r["rule"] for r in both], [r["label"] for r in both]) if both else None
-        s_cnn_same = scores([r["cnn"] for r in both], [r["label"] for r in both]) if both else None
-        log(f"\n  pooled CNN : balanced {s_cnn['bal_acc'] * 100:.1f}%   accuracy "
-            f"{s_cnn['acc'] * 100:.1f}%   AUC {auc(pp, yy):.3f}   (n={len(yy)})")
-        log(f"               not-released cells caught: {s_cnn['tn']}/{s_cnn['tn'] + s_cnn['fp']}"
-            f"   released cells caught: {s_cnn['tp']}/{s_cnn['tp'] + s_cnn['fn']}")
-        if s_rule:
-            log(f"  same cells : CNN balanced {s_cnn_same['bal_acc'] * 100:.1f}%  vs  rule "
-                f"{s_rule['bal_acc'] * 100:.1f}%    (accuracy {s_cnn_same['acc'] * 100:.1f}% "
-                f"vs {s_rule['acc'] * 100:.1f}%, n={len(both)})")
-            log(f"               rule: not-released caught {s_rule['tn']}/{s_rule['tn'] + s_rule['fp']}"
-                f"   released caught {s_rule['tp']}/{s_rule['tp'] + s_rule['fn']}")
-            gain = (s_cnn_same["bal_acc"] - s_rule["bal_acc"]) * 100
-            log("")
-            if gain >= 2.0:
-                log(f"  VERDICT: the CNN beats the rule by {gain:.1f} points (balanced) on "
-                    "images it never saw.\n  Worth using - confirm on a newly labelled "
-                    "field before switching a thesis figure.")
-            elif gain > -2.0:
-                log(f"  VERDICT: within {abs(gain):.1f} points of the rule (balanced) - no "
-                    "real difference.\n  Keep the rule (simpler, explainable), or label "
-                    "more cells and train again.")
+            # ---- summary for this design ----
+            log(f"\n  RESULT, {'TEST A (unseen cells)' if design == 'halves' else 'TEST B (unseen condition)'}"
+                "  - balanced accuracy (mean of the hit rates for both classes)")
+            log(f"  {'field':<28} {'n':>5} {'CNN':>7} {'bright.':>8} {'rule':>7}")
+            for g in sorted({r["field"] for r in rows_d}):
+                rr = [r for r in rows_d if r["field"] == g]
+                yy = [r["label"] for r in rr]
+                sc = scores([r["cnn"] for r in rr], yy)
+                sb = scores([r["bright"] for r in rr], yy)
+                ru = [r for r in rr if r["rule"] != ""]
+                sr = scores([r["rule"] for r in ru], [r["label"] for r in ru]) if ru else None
+                log(f"  {g[-28:]:<28} {len(rr):>5} {pct(sc, 'bal_acc'):>6.1f}% "
+                    f"{pct(sb, 'bal_acc'):>7.1f}% {pct(sr, 'bal_acc'):>6.1f}%")
+                meta_cv.append({"design": design, "field": g, "n": len(rr),
+                                "cnn_bal": sc["bal_acc"], "cnn_acc": sc["acc"],
+                                "bright_bal": sb["bal_acc"],
+                                "rule_bal": sr["bal_acc"] if sr else None,
+                                "rule_acc": sr["acc"] if sr else None})
+            yy = np.array([r["label"] for r in rows_d])
+            pp = np.array([r["p_cnn"] for r in rows_d])
+            sc = scores(pp >= 0.5, yy)
+            sb = scores([r["bright"] for r in rows_d], yy)
+            log(f"\n  pooled  CNN        : {sc['bal_acc'] * 100:5.1f}%   AUC {auc(pp, yy):.3f}"
+                f"   not-released caught {sc['tn']}/{sc['tn'] + sc['fp']}, released "
+                f"{sc['tp']}/{sc['tp'] + sc['fn']}")
+            log(f"          brightness : {sb['bal_acc'] * 100:5.1f}%"
+                f"            not-released caught {sb['tn']}/{sb['tn'] + sb['fp']}, released "
+                f"{sb['tp']}/{sb['tp'] + sb['fn']}")
+            ru = [r for r in rows_d if r["rule"] != ""]
+            if ru:
+                sr = scores([r["rule"] for r in ru], [r["label"] for r in ru])
+                scs = scores([r["cnn"] for r in ru], [r["label"] for r in ru])
+                log(f"          your rule  : {sr['bal_acc'] * 100:5.1f}%   (CNN on the same "
+                    f"{len(ru)} cells: {scs['bal_acc'] * 100:.1f}%)")
+                ref, ref_name, cnn_ref = sr["bal_acc"], "your rule", scs["bal_acc"]
             else:
-                log(f"  VERDICT: the CNN is {-gain:.1f} points WORSE than the rule "
-                    "(balanced). Do not use it.\n  More labelled fields (different days) "
-                    "usually help more than a bigger network.")
-        else:
-            log("  (no *_results.csv found next to the labels, so the rule could "
-                "not be compared)")
+                ref, ref_name, cnn_ref = sb["bal_acc"], "a brightness threshold", sc["bal_acc"]
+            gain = (cnn_ref - ref) * 100
+            what = "on unseen cells" if design == "halves" else "on an unseen condition"
+            if gain >= 2.0:
+                log(f"  VERDICT {what}: CNN better than {ref_name} by {gain:.1f} points.")
+            elif gain > -2.0:
+                log(f"  VERDICT {what}: CNN within {abs(gain):.1f} points of {ref_name} - "
+                    "no real difference.")
+            else:
+                log(f"  VERDICT {what}: CNN {-gain:.1f} points WORSE than {ref_name}.")
+        if not any(r["rule"] != "" for r in cv_rows):
+            log("\n  (no *_results.csv found, so your pipeline rule itself was not "
+                "compared - set\n   'Results folder' for that; the brightness "
+                "yardstick is always computed)")
 
     # ---- final model ----
     final_epochs = args.epochs
@@ -507,11 +561,7 @@ def main(argv=None):
                         "n": sum(1 for e in ex if e["group"] == g),
                         "released": sum(e["y"] for e in ex if e["group"] == g)}
                        for g in groups],
-        "cv": [{"field": n, "n": sc["n"], "cnn_acc": sc["acc"],
-                "rule_acc": (sr["acc"] if sr else None),
-                "cnn_bal": sc["bal_acc"],
-                "rule_bal": (sr["bal_acc"] if sr else None), "auc": a}
-               for n, sc, sr, a in fold_table],
+        "cv": meta_cv,
         "git": git,
         "torch": torch.__version__,
     }

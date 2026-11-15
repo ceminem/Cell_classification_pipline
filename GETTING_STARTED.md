@@ -106,8 +106,11 @@ Takes a few minutes. At the end the log shows a table and a **VERDICT**:
   VERDICT: ...
 ```
 
-Each line is a field the network **did not see while training** — an honest
-test. During training you'll see `stop-set bal.` per epoch: a training field set
+There are two tests. **Test A** (same conditions, unseen cells) answers "does it
+work on new images of what I labelled?". **Test B** (unseen condition) answers the
+harder "does it work on a condition it has never seen?". Each compares the CNN
+with a brightness threshold learned from the same cells (`bright.`) and, if a
+Results folder is set, with your own rule. During training you'll see `stop-set bal.` per epoch: a training field set
 aside to decide when to stop (a `*` marks a new best). The `[test field …
 - shown only]` number is for your information and never used for any decision. The verdict tells you whether the CNN is better than the rule, equal
 (keep the rule), or worse (don't use it). *Open training report* shows it

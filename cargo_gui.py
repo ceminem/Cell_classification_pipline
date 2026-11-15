@@ -1363,22 +1363,30 @@ class CargoGUI:
                 n = sum(t["n"] for t in meta.get("trained_on", []))
                 desc = f"{meta.get('created', '')[:16].replace('T', ' ')}  -  {n} cells"
                 cv = meta.get("cv") or []
-                nn = sum(c["n"] for c in cv)
-                if nn:
-                    # balanced accuracy when the model has it (fair with
-                    # unequal classes), plain accuracy for older models
-                    k_c, k_r, what = (("cnn_bal", "rule_bal", "balanced")
-                                      if all("cnn_bal" in c for c in cv)
-                                      else ("cnn_acc", "rule_acc", "accuracy"))
-                    ok = [c for c in cv if c.get(k_c) is not None
-                          and c[k_c] == c[k_c]]
-                    if ok:
-                        cnn = sum(c[k_c] * c["n"] for c in ok) / sum(c["n"] for c in ok)
-                        desc += f"  -  held-out {what} {cnn * 100:.1f}%"
-                    rr = [c for c in cv if c.get(k_r) is not None and c[k_r] == c[k_r]]
-                    if rr:
-                        rule = sum(c[k_r] * c["n"] for c in rr) / sum(c["n"] for c in rr)
-                        desc += f" (rule {rule * 100:.1f}%)"
+
+                def wavg(rows, key):
+                    ok = [c for c in rows if c.get(key) is not None and c[key] == c[key]]
+                    n = sum(c["n"] for c in ok)
+                    return sum(c[key] * c["n"] for c in ok) / n if n else None
+
+                if cv and "design" in cv[0]:
+                    # newer models: two test designs + brightness yardstick
+                    parts = []
+                    for d, label in (("halves", "unseen cells"),
+                                     ("fields", "unseen condition")):
+                        rows = [c for c in cv if c.get("design") == d]
+                        c_ = wavg(rows, "cnn_bal")
+                        b_ = wavg(rows, "bright_bal")
+                        if c_ is not None:
+                            parts.append(f"{label} {c_ * 100:.0f}%"
+                                         + (f" (brightness {b_ * 100:.0f}%)" if b_ is not None else ""))
+                    if parts:
+                        desc += "  -  " + " · ".join(parts)
+                elif cv:
+                    k = "cnn_bal" if all("cnn_bal" in c for c in cv) else "cnn_acc"
+                    c_ = wavg(cv, k)
+                    if c_ is not None:
+                        desc += f"  -  held-out {c_ * 100:.1f}%"
             except (OSError, ValueError, KeyError, TypeError):
                 pass
             out.append((desc, p))

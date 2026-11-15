@@ -577,7 +577,9 @@ def build_examples(sets, rolling_ball_radius=50, include_nonblind=False, log=pri
                 rule = 1 if c.startswith("released") else (0 if c == "not_released" else None)
             examples.append({"group": s["key"], "cell_id": cid, "y": y,
                              "img": img, "own": own, "other": other,
-                             "mean_whole": table[cid]["mean"], "rule": rule})
+                             "mean_whole": table[cid]["mean"], "rule": rule,
+                             "cx": (table[cid]["slice"][1].start + table[cid]["slice"][1].stop) / 2.0,
+                             "cy": (table[cid]["slice"][0].start + table[cid]["slice"][0].stop) / 2.0})
         if missing:
             log(f"    ({missing} labelled ids not found in the mask)")
         if no_uptake:

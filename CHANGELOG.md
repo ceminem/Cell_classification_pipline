@@ -9,6 +9,9 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- CNN training reports **two tests**: same conditions/unseen cells (each field
+  split in halves) and unseen condition (leave one field out), each with a
+  **brightness-threshold yardstick** learned on the same training cells.
 - **Early stopping** for CNN training, on a stopping set taken from the
   training fields (never the test field); best epoch by balanced accuracy;
   final model trained for the median chosen epoch. `--no-early-stop`,
@@ -42,6 +45,9 @@ Analysis version unchanged (3.1): rule results are identical to before.
   (CRLF for the `.bat`), `config/gui_config.example.json`.
 
 ### Fixed
+- Early stopping set aside a whole training field, which on real data removed
+  a whole condition from training and gave erratic stopping; it now takes ~15 %
+  of the cells of every training field.
 - CNN training skips labelled cells below the uptake limit (brightness < 5),
   which the pipeline excludes and the CNN never classifies; they were
   inflating the not-released class (15 of 69 labels in the first real run).
