@@ -726,6 +726,14 @@ threshold + CV cap as really run). It reports accuracy, balanced accuracy
 The rule's thresholds were fitted on these same labels, so the comparison gives
 the rule a small home advantage. A CNN that still wins has earned it.
 
+**A missing brightfield is fine.** The CNN uses only the fluorescence image,
+the mask and the labels. When a sample folder holds just one acquisition image,
+it is accepted as the fluorescence image if its pixels say so - green-only RGB
+(green mean > 1.5× red and blue), or, for single-channel images, a dark
+background with bright objects (median < 30 % of the 99th percentile). A lone
+brightfield (three equal channels / bright even background) is refused, so it
+can never be measured by mistake. The log states which rule decided.
+
 **No-uptake cells are left out.** A labelled cell whose brightness is below
 `MIN_CELL_MEAN` (5) is "no uptake" for the pipeline: excluded from the release
 percentage and never shown to the CNN when classifying. Training skips it too,

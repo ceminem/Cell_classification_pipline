@@ -290,6 +290,79 @@ def _find_mask(sample_dir, hint=""):
     return tifs[0] if len(tifs) == 1 else None
 
 
+_GENERATED = ("_cp_masks", "_classified_overlay", "_brightfield_for_cellpose",
+              "_bbox", "overlay")
+
+
+def looks_like_fluorescence(path):
+    """
+    Decide from the PIXELS whether an image is a calcein fluorescence image.
+
+      RGB  : fluorescence is green-only (green mean well above red and blue);
+             a brightfield has three nearly equal channels.
+      grey : fluorescence is mostly dark with bright cells (median far below
+             the 99th percentile); brightfield is a bright, even background.
+    Returns (True/False, reason). Read on every 8th pixel - fast, and plenty
+    to tell the two apart.
+    """
+    import tifffile
+    a = tifffile.imread(path)
+    if a.ndim == 3 and a.shape[-1] in (3, 4):
+        r, g, b = (a[::8, ::8, i].astype(np.float32).mean() for i in range(3))
+        if g > 1.5 * max(r, b, 1e-6):
+            return True, f"green-only RGB (mean R/G/B {r:.0f}/{g:.0f}/{b:.0f})"
+        return False, f"three similar channels (mean R/G/B {r:.0f}/{g:.0f}/{b:.0f}) - looks like brightfield"
+    if a.ndim == 3:
+        a = a.max(axis=0)
+    v = a[::8, ::8].astype(np.float32)
+    med, p99 = float(np.median(v)), float(np.percentile(v, 99))
+    if p99 > 0 and med < 0.3 * p99:
+        return True, f"dark background with bright objects (median {med:.0f}, p99 {p99:.0f})"
+    return False, f"bright even background (median {med:.0f}, p99 {p99:.0f}) - looks like brightfield"
+
+
+def find_fluorescence(folder, log=print):
+    """
+    The fluorescence image of a sample folder.
+
+    Normally the pipeline's own find_channels() identifies it (by name, or as
+    the later of the two acquisition tifs). Some folders hold only the
+    fluorescence image - e.g. the brightfield was never saved or not copied.
+    The CNN does not need the brightfield (it uses the mask the pipeline
+    already made), so a SINGLE remaining acquisition tif is accepted if its
+    pixels show it is a fluorescence image.
+    """
+    import run_cargo_pipeline as rcp
+    try:
+        _bf, fl = rcp.find_channels(folder)
+    except OSError:
+        return None
+    if fl:
+        return fl
+    try:
+        cands = [f for f in sorted(os.listdir(folder))
+                 if f.lower().endswith((".tif", ".tiff"))
+                 and not any(t in f.lower() for t in _GENERATED)
+                 and "brightfield" not in f.lower()]
+    except OSError:
+        return None
+    if len(cands) != 1:
+        return None
+    path = os.path.join(folder, cands[0])
+    try:
+        ok, why = looks_like_fluorescence(path)
+    except Exception as exc:
+        log(f"  ! could not read {cands[0]}: {exc}")
+        return None
+    if ok:
+        log(f"  {os.path.basename(folder)}: no brightfield - using {cands[0]} as "
+            f"the fluorescence image ({why})")
+        return path
+    log(f"  ! {os.path.basename(folder)}: the only image, {cands[0]}, is not a "
+        f"fluorescence image ({why})")
+    return None
+
+
 def _tif_listing(folder):
     """What image files a folder holds - shown when no fluorescence image
     could be identified, so the cause is visible without opening Explorer."""
@@ -352,10 +425,7 @@ def discover(roots, log=print, results_roots=None):
                 sample_dir = (os.path.dirname(dirpath)
                               if os.path.basename(dirpath) == "edited_results"
                               else dirpath)
-                try:
-                    bf, fl = rcp.find_channels(sample_dir)
-                except OSError:
-                    bf, fl = None, None
+                fl = find_fluorescence(sample_dir, log)
                 well = os.path.basename(sample_dir)
 
                 # 1. EXACT link. The curator names the label file after the mask

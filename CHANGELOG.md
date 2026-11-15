@@ -9,6 +9,9 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- CNN accepts sample folders without a brightfield image: a lone acquisition
+  image is used if its pixels show it is fluorescence (green-only RGB, or dark
+  background with bright objects); a lone brightfield is refused.
 - Curator shows the calcein signal in **green** (default), **green on
   brightfield**, or grey (key **V**), with a display-only *Brightness* slider.
 - **CNN tab in the GUI**: open the curation tool, train, classify, open the

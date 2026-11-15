@@ -202,7 +202,7 @@ def main(argv=None):
     for s in samples:
         folder = os.path.join(parent, s)
         print(f"[{s}]")
-        _bf, fl = rcp.find_channels(folder) if os.path.isdir(folder) else (None, None)
+        fl = D.find_fluorescence(folder) if os.path.isdir(folder) else None
         masks = [m for m in glob.glob(os.path.join(folder, "*_cp_masks.*"))
                  if m.lower().endswith((".tif", ".tiff", ".png"))]
         masks.sort(key=lambda m: not m.lower().endswith((".tif", ".tiff")))
