@@ -672,6 +672,25 @@ hundred labels a natural epoch is only 3–4 batches, and 60 such epochs were to
 little training. The epoch setting now means the same amount of training
 however many cells are labelled.
 
+**Early stopping.** In every cross-validation round a *stopping set* is taken
+from the TRAINING fields: the smallest training field with at least 5 cells of
+each class (or, with fewer than 3 training fields, a stratified 20 % of the
+training cells). After every epoch the network is scored on it; the weights from
+the best epoch are kept (highest balanced accuracy, ties within 0.5 points
+broken by the lower class-balanced loss; epochs 1–4 are never chosen), and
+training ends after 15 epochs without improvement (`--patience`, never before
+`--min-epochs` 10). The test field is printed for information only and never
+influences any choice — choosing the epoch by the test field would inflate its
+score. The final model is trained on all labelled cells for the median of the
+epochs chosen in the rounds. Motivation: in the first real runs the held-out
+field peaked early (A1: 83 % at epoch 10, 68 % at epoch 60) while the training
+loss went to ~0 — memorising the training images. On synthetic data the
+stopping set tracked the test field closely (e.g. 90.3 % vs 88.3 %, then
+55.8 % vs 56.3 %); result 89.2 % vs rule 81.9 % balanced. Loss alone as the
+criterion was tried first and kept choosing epoch 2 (an uncertain network is
+never confidently wrong), hence balanced accuracy. `--no-early-stop` restores
+fixed-length training.
+
 **GPU self-test.** Before training (and prediction) one forward/backward pass
 is run on the GPU. With PyTorch-for-ROCm on Windows, AMD's MIOpen library can
 fail to compile its batch-normalisation training kernel at run time

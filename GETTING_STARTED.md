@@ -107,7 +107,9 @@ Takes a few minutes. At the end the log shows a table and a **VERDICT**:
 ```
 
 Each line is a field the network **did not see while training** — an honest
-test. The verdict tells you whether the CNN is better than the rule, equal
+test. During training you'll see `stop-set bal.` per epoch: a training field set
+aside to decide when to stop (a `*` marks a new best). The `[test field …
+- shown only]` number is for your information and never used for any decision. The verdict tells you whether the CNN is better than the rule, equal
 (keep the rule), or worse (don't use it). *Open training report* shows it
 again later.
 

@@ -9,6 +9,10 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- **Early stopping** for CNN training, on a stopping set taken from the
+  training fields (never the test field); best epoch by balanced accuracy;
+  final model trained for the median chosen epoch. `--no-early-stop`,
+  `--patience`, `--min-epochs`.
 - CNN accepts sample folders without a brightfield image: a lone acquisition
   image is used if its pixels show it is fluorescence (green-only RGB, or dark
   background with bright objects); a lone brightfield is refused.

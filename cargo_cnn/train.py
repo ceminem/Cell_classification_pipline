@@ -97,11 +97,73 @@ def scores(pred, y):
 
 MIN_EPOCH_SAMPLES = 1024     # cells drawn per epoch, at least (16 batches of 64)
 
-def train_model(train_ex, args, device, log, seed=0, val_ex=None):
+def balanced_bce(p, y):
+    """Cross-entropy averaged per class, then over the two classes, so the
+    rare class counts as much as the common one. Smoother than balanced
+    accuracy, which on a small stopping set jumps by whole cells."""
+    p = np.clip(np.asarray(p, float), 1e-6, 1 - 1e-6)
+    y = np.asarray(y, int)
+    loss = -(y * np.log(p) + (1 - y) * np.log(1 - p))
+    parts = [loss[y == c].mean() for c in (0, 1) if (y == c).any()]
+    return float(np.mean(parts)) if parts else float("nan")
+
+
+def split_for_stopping(train_ex, seed=0):
+    """
+    Set aside part of the TRAINING data to decide when to stop.
+
+    Never the test field - that would let the test choose the model and
+    inflate its score. Preferably a whole training field, because the
+    overfitting seen in practice is to the look of particular images (the
+    held-out FIELD got worse while the training cells were learned
+    perfectly); cells from the same images would not show it. The smallest
+    field with at least 5 cells of each class is chosen, to lose as little
+    training data as possible. With fewer than 3 training fields a
+    stratified 20% of cells is used instead.
+
+    Returns (train_part, stop_part, description).
+    """
+    groups = sorted({e["group"] for e in train_ex})
+    if len(groups) >= 3:
+        def counts(g):
+            ys = [e["y"] for e in train_ex if e["group"] == g]
+            return len(ys), sum(ys), len(ys) - sum(ys)
+        ok = [g for g in groups if counts(g)[1] >= 5 and counts(g)[2] >= 5]
+        if ok:
+            g = min(ok, key=lambda g: counts(g)[0])
+            return ([e for e in train_ex if e["group"] != g],
+                    [e for e in train_ex if e["group"] == g], f"field {g}")
+    rng = np.random.default_rng(seed)
+    stop_idx = set()
+    for c in (0, 1):
+        idx = [i for i, e in enumerate(train_ex) if e["y"] == c]
+        rng.shuffle(idx)
+        stop_idx.update(idx[:max(1, int(round(0.2 * len(idx))))])
+    return ([e for i, e in enumerate(train_ex) if i not in stop_idx],
+            [e for i, e in enumerate(train_ex) if i in stop_idx], "20% of training cells")
+
+
+def train_model(train_ex, args, device, log, seed=0, show_ex=None, stop_ex=None,
+                epochs=None):
+    """
+    Train one network.
+
+    stop_ex  EARLY STOPPING set (from the training fields). Checked after
+             every epoch; the weights with the lowest balanced loss on it are
+             kept, and training ends when it has not improved for
+             args.patience epochs. Returns the epoch at which it was best.
+    show_ex  the TEST field. Only printed, never used for any decision.
+    epochs   overrides args.epochs (the final model uses the typical
+             stopping epoch found in cross-validation).
+
+    Returns (model, best_epoch).
+    """
+    import copy
     import torch
     from torch.utils.data import DataLoader
     from cargo_cnn.model import CellNet
 
+    n_epochs = int(epochs or args.epochs)
     torch.manual_seed(seed)
     np.random.seed(seed)
     model = CellNet(width=args.width, dropout=args.dropout).to(device)
@@ -130,14 +192,25 @@ def train_model(train_ex, args, device, log, seed=0, val_ex=None):
     lossf = torch.nn.BCEWithLogitsLoss()
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
                             weight_decay=args.weight_decay)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_epochs)
 
     ds = D.CellDataset(train_ex, train=True, seed=seed,
                        exposure=(1 / args.exposure_aug, args.exposure_aug))
     dl = DataLoader(ds, batch_size=args.batch, sampler=sampler, num_workers=0,
                     drop_last=True)
 
-    for ep in range(args.epochs):
+    # Which epoch is "best" on the stopping set: highest BALANCED ACCURACY
+    # (the number the report judges by); within half a point, the lower
+    # balanced loss wins. Loss alone was tried first and kept picking epoch 2:
+    # an early, uncertain network has a low loss because it is never
+    # confidently wrong, while it is not yet good at the task. The first
+    # WARMUP epochs are never chosen for the same reason.
+    WARMUP = 5
+    best_bal, best_loss, best_ep, best_state, bad = -1.0, float("inf"), n_epochs, None, 0
+    y_stop = [e["y"] for e in stop_ex] if stop_ex else None
+    every = max(1, n_epochs // 6)
+
+    for ep in range(n_epochs):
         model.train()
         tot, nb = 0.0, 0
         for xb, yb in dl:
@@ -151,14 +224,43 @@ def train_model(train_ex, args, device, log, seed=0, val_ex=None):
             tot += float(loss.detach())
             nb += 1
         sched.step()
-        if (ep + 1) % max(1, args.epochs // 6) == 0 or ep == args.epochs - 1:
-            msg = f"      epoch {ep + 1:>3}/{args.epochs}  train loss {tot / max(nb, 1):.3f}"
-            if val_ex:
-                p = predict(model, val_ex, device, tta=False)
-                yy = [e["y"] for e in val_ex]
-                msg += f"   held-out acc {scores(p >= 0.5, yy)['acc'] * 100:.1f}%"
+
+        improved = False
+        stop_msg = ""
+        if stop_ex:
+            ps = predict(model, stop_ex, device, tta=False)
+            vl = balanced_bce(ps, y_stop)
+            vb = scores(ps >= 0.5, y_stop)["bal_acc"]
+            if ep + 1 >= WARMUP:
+                better = (vb > best_bal + 0.005 or
+                          (abs(vb - best_bal) <= 0.005 and vl < best_loss - 1e-4))
+                if better:
+                    best_bal, best_loss, best_ep, bad, improved = vb, vl, ep + 1, 0, True
+                    best_state = {k: v.detach().cpu().clone()
+                                  for k, v in model.state_dict().items()}
+                else:
+                    bad += 1
+            stop_msg = (f"   stop-set bal. {vb * 100:.1f}%"
+                        f" loss {vl:.3f}{' *' if improved else ''}")
+
+        last = ep == n_epochs - 1
+        stopping = bool(stop_ex) and bad >= args.patience and ep + 1 >= args.min_epochs
+        if (ep + 1) % every == 0 or last or stopping:
+            msg = f"      epoch {ep + 1:>3}/{n_epochs}  train loss {tot / max(nb, 1):.3f}{stop_msg}"
+            if show_ex:
+                p = predict(model, show_ex, device, tta=False)
+                yy = [e["y"] for e in show_ex]
+                msg += (f"   [test field bal. {scores(p >= 0.5, yy)['bal_acc'] * 100:.1f}%"
+                        " - shown only]")
             log(msg)
-    return model
+        if stopping:
+            log(f"      early stop: no improvement on the stopping set for "
+                f"{args.patience} epochs; using the weights from epoch {best_ep}")
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    return model, (best_ep if stop_ex else n_epochs)
 
 
 def predict(model, examples, device, tta=True, batch=256):
@@ -209,6 +311,12 @@ def main(argv=None):
     ap.add_argument("--include-nonblind", action="store_true",
                     help="also use labels made with the colours visible (not advised)")
     ap.add_argument("--no-cv", action="store_true", help="skip cross-validation")
+    ap.add_argument("--no-early-stop", action="store_true",
+                    help="train every fold for the full number of epochs")
+    ap.add_argument("--patience", type=int, default=15,
+                    help="early stopping: epochs without improvement before stopping")
+    ap.add_argument("--min-epochs", type=int, default=10,
+                    help="early stopping: never stop before this epoch")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args(argv)
@@ -269,6 +377,7 @@ def main(argv=None):
     # ---- cross-validation ----
     cv_rows = []
     fold_table = []
+    best_epochs = []
     if not args.no_cv:
         if len(groups) >= 3:
             folds = [[g] for g in groups]
@@ -295,7 +404,14 @@ def main(argv=None):
                 continue
             log(f"  [{fi + 1}/{len(folds)}] test = {name} ({len(test)} cells), "
                 f"train = {len(train)} cells")
-            m = train_model(train, args, device, log, seed=args.seed + fi, val_ex=test)
+            stop = None
+            if not args.no_early_stop:
+                train, stop, how = split_for_stopping(train, seed=args.seed + fi)
+                log(f"      early-stopping set: {how} ({len(stop)} cells); "
+                    f"training on {len(train)}")
+            m, best_ep = train_model(train, args, device, log, seed=args.seed + fi,
+                                     show_ex=test, stop_ex=stop)
+            best_epochs.append(best_ep)
             p = predict(m, test, device, tta=True)
             yt = [e["y"] for e in test]
             s_cnn = scores(p >= 0.5, yt)
@@ -357,8 +473,13 @@ def main(argv=None):
                 "not be compared)")
 
     # ---- final model ----
-    log(f"\nFINAL MODEL: training on all {len(ex)} cells")
-    model = train_model(ex, args, device, log, seed=args.seed)
+    final_epochs = args.epochs
+    if best_epochs and not args.no_early_stop:
+        final_epochs = max(args.min_epochs, int(round(float(np.median(best_epochs)))))
+        log(f"\nEarly stopping chose epochs {best_epochs} in the folds -> the final "
+            f"model trains for {final_epochs} (the median).")
+    log(f"\nFINAL MODEL: training on all {len(ex)} cells for {final_epochs} epochs")
+    model, _ = train_model(ex, args, device, log, seed=args.seed, epochs=final_epochs)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = os.path.join(args.out, f"cnn_{stamp}")
@@ -379,6 +500,9 @@ def main(argv=None):
         "min_cell_mean": args.min_cell_mean,
         "training": {k: v for k, v in vars(args).items()
                      if k not in ("data", "pairs", "out")},
+        "early_stopping": {"fold_best_epochs": best_epochs,
+                           "final_epochs": final_epochs,
+                           "enabled": not args.no_early_stop},
         "trained_on": [{"field": g,
                         "n": sum(1 for e in ex if e["group"] == g),
                         "released": sum(e["y"] for e in ex if e["group"] == g)}
