@@ -180,6 +180,10 @@ def predict(model, examples, device, tta=True, batch=256):
     return out / len(variants)
 
 
+def groups_hint(ex):
+    return {e["group"] for e in ex}
+
+
 # ───────────────────────────────────────────────────────────── main ──
 
 def main(argv=None):
@@ -236,7 +240,12 @@ def main(argv=None):
     ex = D.build_examples(sets, args.rolling_ball, args.include_nonblind, log,
                           min_cell_mean=args.min_cell_mean)
     if len(ex) < 30:
-        raise SystemExit(f"Only {len(ex)} labelled cells - too few to train on.")
+        raise SystemExit(
+            f"Only {len(ex)} labelled cells were found in {len(groups_hint(ex))} "
+            "field(s) - too few to train on.\n"
+            "If you added a single SAMPLE folder (e.g. ...\\B2), add the folder "
+            "that CONTAINS all\nlabelled samples instead (e.g. ...\\20261114); "
+            "all its subfolders are searched.")
     y_all = np.array([e["y"] for e in ex])
     groups = sorted({e["group"] for e in ex})
     log(f"\n{len(ex)} cells ({int(y_all.sum())} released, "

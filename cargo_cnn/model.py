@@ -28,6 +28,8 @@ WHY AVERAGE AND MAX POOL TOGETHER
 =============================================================================
 """
 
+import os
+
 import torch
 from torch import nn
 
@@ -108,6 +110,17 @@ def ensure_working_device(device, log=print, train=True, force=False):
 
     if device.type == "cpu" and not force:
         return device
+
+    # Known case: PyTorch-for-ROCm on Windows. MIOpen's run-time compiled
+    # batch-norm kernel does not build there, and every attempt prints a long
+    # compiler error before the fallback below takes over. Skip MIOpen up
+    # front instead - same result, no alarming output. (The self-test still
+    # runs, so a different failure is still caught.)
+    if (os.name == "nt" and getattr(torch.version, "hip", None)
+            and torch.backends.cudnn.enabled):
+        torch.backends.cudnn.enabled = False
+        log("AMD GPU on Windows: using PyTorch's own GPU kernels (MIOpen's "
+            "batch-norm kernel does not build on ROCm for Windows).")
 
     def attempt():
         m = CellNet().to(device)

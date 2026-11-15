@@ -162,6 +162,7 @@ a figure**, so the result points to saved code.
 | training: *Only N labelled cells - too few* | label more cells (blind mode!) |
 | update: *git is not installed* | use GitHub Desktop *Fetch origin → Pull origin* |
 | training log: *GPU self-test failed … switching MIOpen off* | nothing to do - a known AMD-on-Windows problem; training continues on the GPU with PyTorch's own kernels |
+| training: *Only N labelled cells were found in 1 field* | you added a single sample folder - add the folder that contains all labelled samples (e.g. `…\20261114`) |
 | training: *skipped … no fluorescence image identified* | the log lists the .tif files in that folder; the original fluorescence image must sit next to the mask (name containing `fluor`) |
 | training: *NOTE: only … are 'not released'* | label more cells of the rare kind (blind); the verdict uses balanced accuracy so it is not fooled meanwhile |
 
