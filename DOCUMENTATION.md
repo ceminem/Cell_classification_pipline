@@ -1272,7 +1272,10 @@ transformer; its time grows with the number of pixels it sees. At ½ size a
 6000 × 4500 px field is 6.7 megapixels, at ¼ size 1.7 (about 4× faster).
 Cells of ~85 px at full size are ~21 px at ¼ size, still well segmentable;
 the log warns when the median cell is below 15 px at the chosen size. On a
-GPU every setting takes seconds; on a laptop CPU, minutes per image. While
+GPU every setting takes seconds; on a laptop CPU, minutes per image. On the
+CPU the network runs in float32 unless the processor computes bfloat16
+natively (Cellpose's bfloat16 default is emulated, ~10x slower, on most
+laptop CPUs); a ~1 s test at model loading decides. While
 segmenting, a line every 30 s shows the run is alive.
 
 **Limits.** The count is only as good as the segmentation: check the outline

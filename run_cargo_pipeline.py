@@ -345,6 +345,47 @@ def load_brightfield(bf_path):
     return arr
 
 
+def cpu_bfloat16_is_fast():
+    """
+    Is bfloat16 faster than float32 on THIS processor?
+
+    Cellpose 4 runs its network in bfloat16 by default, also on the CPU. Only
+    processors with native bfloat16 (AVX512-BF16 / AMX: recent servers, AMD
+    Zen 4/5) compute it in hardware; on most laptop CPUs it is emulated and
+    about 10x SLOWER than float32 (measured: 3.0 s vs 0.24 s for one
+    transformer block). A ~1 s matrix-multiply test decides; float32 is also
+    the exact choice, so it is the default when in doubt.
+    """
+    try:
+        import time as _t
+        import torch
+        a = torch.randn(512, 512)
+        b = torch.randn(512, 512)
+
+        def bench(dt):
+            x, y = a.to(dt), b.to(dt)
+            x @ y                                   # warm-up
+            t0 = _t.perf_counter()
+            for _ in range(4):
+                x @ y
+            return _t.perf_counter() - t0
+
+        return bench(torch.bfloat16) < 0.8 * bench(torch.float32)
+    except Exception:
+        return False
+
+
+def make_cpu_model(models):
+    """Cellpose model on the CPU in the faster number format."""
+    fast = cpu_bfloat16_is_fast()
+    print("    CPU number format: " + ("bfloat16 (native on this CPU)" if fast else
+          "float32 (bfloat16 would be emulated on this CPU, ~10x slower)"))
+    try:
+        return models.CellposeModel(gpu=False, use_bfloat16=fast)
+    except TypeError:                     # Cellpose versions without the option
+        return models.CellposeModel(gpu=False)
+
+
 def run_cellpose(img, mask_path, model_holder):
     """
     Segment the brightfield array and save the LABEL mask as PNG.
@@ -368,14 +409,14 @@ def run_cellpose(img, mask_path, model_holder):
         # present, instead of silently falling back to CPU.
         try:
             if device in (None, "cpu") or not USE_GPU:
-                model_holder["model"] = models.CellposeModel(gpu=False)
+                model_holder["model"] = make_cpu_model(models)
             else:
                 import torch
                 dev = torch.device(device) if isinstance(device, str) else device
                 model_holder["model"] = models.CellposeModel(gpu=True, device=dev)
         except Exception as exc:
             print(f"    GPU init failed ({exc}); falling back to CPU")
-            model_holder["model"] = models.CellposeModel(gpu=False)
+            model_holder["model"] = make_cpu_model(models)
 
     model = model_holder["model"]
 

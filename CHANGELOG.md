@@ -8,6 +8,14 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 
 Analysis version unchanged (3.1): rule results are identical to before.
 
+### Fixed
+- **Cellpose on a CPU was ~10x too slow**: Cellpose 4 runs in bfloat16 by
+  default, which most laptop processors only emulate (measured 3.0 s vs
+  0.24 s per transformer block). On the CPU a ~1 s test now picks bfloat16
+  only where it is native, otherwise float32. GPU runs are unchanged. Masks
+  from CPU runs may differ marginally from earlier CPU runs (float32 is the
+  more exact format).
+
 ### Added
 - Cell count: **Speed** setting (segment at 1/2, 1/3 or 1/4 size; time grows
   with the pixel count, so 1/4 is ~4x faster than 1/2 - meant for laptops
