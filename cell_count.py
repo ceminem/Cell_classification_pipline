@@ -502,6 +502,11 @@ def main(argv=None):
                 print("    mask exists - reused (use --force to segment again)")
             else:
                 print(f"    Cellpose on {W}x{H} px (x{scale:g}) ...")
+                dev = holder.get("device_desc", "")
+                if not dev or dev.upper().startswith("CPU"):
+                    mp = W * H * scale * scale / 1e6
+                    print(f"    on a CPU this takes minutes (~{mp:.1f} megapixels); "
+                          "nothing is printed until it is done", flush=True)
                 masks = segment(gray8, scale, holder)
             seg_scale = W / float(masks.shape[1])        # mask px -> image px
             masks_full = upscale_labels(masks, (H, W))

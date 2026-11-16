@@ -25,6 +25,7 @@ tkinter ships with Python, so there is nothing extra to install for the GUI.
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -1808,6 +1809,7 @@ class CargoGUI:
         if self.count_force_var.get():
             cmd.append("--force")
 
+        self._count_last_q = -1
         self.count_log.delete("1.0", "end")
         self.count_log.insert("end", "Counting ... the first image also loads Cellpose "
                                      "(and downloads its model once).\n\n")
@@ -1855,6 +1857,15 @@ class CargoGUI:
                     self._count_find_figs()
                 else:
                     s = str(item)
+                    # download / progress bars (tqdm) arrive as hundreds of
+                    # lines: show only every 25 %
+                    m = re.search(r"(\d{1,3})%\|", s)
+                    if m:
+                        q = int(m.group(1)) // 25
+                        if q == getattr(self, "_count_last_q", -1):
+                            continue
+                        self._count_last_q = q
+                        s = "    " + s.strip() + "\n"
                     low = s.lower()
                     tag = ("err" if ("error" in low or "traceback" in low) else
                            "ok" if " counted " in low else
