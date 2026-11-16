@@ -1218,7 +1218,8 @@ file name already contains (`A1/A1_brightfield.tif` → `A1_brightfield`).
 
 **Segmentation.** The image is reduced to one 2D plane (RGB averaged, stacks
 max-projected), stretched to 8 bit between the 0.5th and 99.5th percentile,
-downscaled by *Cellpose downscale* and segmented by the release pipeline's
+downscaled (*Speed* in the tab, `--scale`; default *Cellpose downscale*
+from the Settings tab) and segmented by the release pipeline's
 own `run_cellpose`: same model (cpsam), flow / cellprob thresholds, GPU or
 CPU, and the same automatic retry at cellprob −2 when nothing is found. The
 label mask is enlarged back to the image size (nearest neighbour) and saved
@@ -1265,6 +1266,14 @@ looks the same at every output size.
 objects, at edge, too small, counted, unbiased count, coverage, median
 area/diameter, field area, density, Cellpose settings), `cells/*_cells.csv`
 (per cell), `masks/*_cp_masks.tif`, `figures/`.
+
+**Speed.** Cellpose-SAM (the only model of Cellpose 4) is a large vision
+transformer; its time grows with the number of pixels it sees. At ½ size a
+6000 × 4500 px field is 6.7 megapixels, at ¼ size 1.7 (about 4× faster).
+Cells of ~85 px at full size are ~21 px at ¼ size, still well segmentable;
+the log warns when the median cell is below 15 px at the chosen size. On a
+GPU every setting takes seconds; on a laptop CPU, minutes per image. While
+segmenting, a line every 30 s shows the run is alive.
 
 **Limits.** The count is only as good as the segmentation: check the outline
 figure before using a number. Clumps that Cellpose merges count as one cell;

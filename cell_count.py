@@ -199,10 +199,21 @@ def segment(gray8, scale, holder):
         img = np.array(im.resize((max(1, round(im.width * scale)),
                                   max(1, round(im.height * scale))), Image.BILINEAR))
     tmp = os.path.join(tempfile.gettempdir(), f"cellcount_{os.getpid()}_cp_masks.tif")
+    # Cellpose prints nothing while it works; say every 30 s that it is alive
+    import threading
+    done = threading.Event()
+    t0 = time.time()
+
+    def heartbeat():
+        while not done.wait(30):
+            print(f"    ... still segmenting ({(time.time() - t0) / 60:.1f} min)", flush=True)
+
+    threading.Thread(target=heartbeat, daemon=True).start()
     try:
         rcp.run_cellpose(img, tmp, holder)
         masks = tifffile.imread(tmp)
     finally:
+        done.set()
         for p in (tmp, os.path.splitext(tmp)[0] + "_bbox.csv"):
             try:
                 os.remove(p)
@@ -444,6 +455,10 @@ def main(argv=None):
     ap.add_argument("--no-pdf", dest="pdf", action="store_false")
     ap.add_argument("--vector-max-px", type=int, default=3000,
                     help="image resolution inside PDF/SVG (long side)")
+    ap.add_argument("--scale", type=float, default=0.0,
+                    help="segment at this fraction of the image size (0.5 = half; "
+                         "smaller = faster: time grows with the number of pixels). "
+                         "Default: 'Cellpose downscale' from the settings")
     ap.add_argument("--force", action="store_true",
                     help="segment again even if a mask exists")
     ap.add_argument("--config", help="JSON settings from the GUI (Cellpose thresholds etc.)")
@@ -456,7 +471,7 @@ def main(argv=None):
                 rcp.apply_settings(json.load(fh))
         except Exception as exc:
             print(f"WARNING: could not read {opt.config}: {exc}")
-    scale = float(rcp.CELLPOSE_SCALE_FACTOR or 1.0)
+    scale = float(opt.scale or rcp.CELLPOSE_SCALE_FACTOR or 1.0)
 
     first = opt.inputs[0].strip().strip('"')
     out_parent = opt.output or (first if os.path.isdir(first) else os.path.dirname(first))
@@ -506,7 +521,7 @@ def main(argv=None):
                 if not dev or dev.upper().startswith("CPU"):
                     mp = W * H * scale * scale / 1e6
                     print(f"    on a CPU this takes minutes (~{mp:.1f} megapixels); "
-                          "nothing is printed until it is done", flush=True)
+                          "a line every 30 s shows it is still working", flush=True)
                 masks = segment(gray8, scale, holder)
             seg_scale = W / float(masks.shape[1])        # mask px -> image px
             masks_full = upscale_labels(masks, (H, W))
@@ -557,6 +572,12 @@ def main(argv=None):
                 "flow_threshold": rcp.FLOW_THRESHOLD, "downscale": scale,
             }
             summary.append(row)
+            if interior:
+                d_seg = 2 * math.sqrt(med_a / math.pi) * (masks.shape[1] / float(W))
+                if d_seg < 15:
+                    print(f"    WARNING: cells are only ~{d_seg:.0f} px across at the "
+                          "segmentation size; small cells may be missed. Use a slower "
+                          "speed setting (larger size) for this magnification.")
             extra = (f", {row['density_per_mm2']} cells/mm2" if area_mm2 else "")
             print(f"    {n_count} counted  ({n_obj} objects, {n_edge} at the edge"
                   + (f", {n_small} too small" if n_small else "") + f"){extra}"

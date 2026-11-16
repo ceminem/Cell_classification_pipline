@@ -9,6 +9,10 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- Cell count: **Speed** setting (segment at 1/2, 1/3 or 1/4 size; time grows
+  with the pixel count, so 1/4 is ~4x faster than 1/2 - meant for laptops
+  without GPU), a "still segmenting (x min)" line every 30 s, and a warning
+  when cells become too small (< 15 px) at the chosen size.
 - **Cell count** (tab + `cell_count.py`): brightfield-only images are
   segmented with Cellpose (same settings as the analysis) and counted; edge
   rule all / complete cells only / unbiased counting frame, minimum area,

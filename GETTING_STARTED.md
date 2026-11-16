@@ -95,11 +95,13 @@ For images that have only brightfield (no fluorescence):
 
 1. **Cell count** tab → *Add folder…* (or *Add images…*).
 2. *Pixels per µm*: `2.6428` for the 20x objective (change for others).
-3. *Cells at the image edge*: *Count every cell* for the number in the
+3. *Speed*: on a laptop without GPU choose **Fastest: 1/4 size** (minutes
+   instead of most of an hour per image); check the outlines once.
+4. *Cells at the image edge*: *Count every cell* for the number in the
    field; *Counting frame* for cells per mm² (unbiased).
-4. *Count cells*. The preview on the right shows each figure; check that the
+5. *Count cells*. The preview on the right shows each figure; check that the
    outlines fit before using the numbers.
-5. *Open results folder* → `cell_count`:
+6. *Open results folder* → `cell_count`:
    `cell_count_summary.csv` (counts, density, cell size), `figures/` (PNG and
    PDF for the paper; the PDF outlines are vector lines), `masks/`, `cells/`.
 

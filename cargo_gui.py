@@ -1557,6 +1557,12 @@ class CargoGUI:
         ("Only cells completely inside the image", "exclude"),
         ("Counting frame: top/right edge count, bottom/left not (cells per area)", "unbiased"),
     ]
+    COUNT_SPEED = [
+        ("Settings tab (Cellpose downscale)", 0.0),
+        ("Accurate: 1/2 size", 0.5),
+        ("Faster: 1/3 size (~2x faster than 1/2)", 1 / 3.0),
+        ("Fastest: 1/4 size (~4x faster than 1/2) - good on a laptop CPU", 0.25),
+    ]
     COUNT_SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   "cellcount_settings.json")
 
@@ -1621,6 +1627,17 @@ class CargoGUI:
         e = ttk.Entry(r, textvariable=self.count_min_var, width=7)
         e.pack(side="left")
         ttk.Label(r, text="µm²  (debris; 0 = keep all)").pack(side="left", padx=4)
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Label(r, text="Speed:").pack(side="left")
+        self.count_speed_var = tk.StringVar(value=self.COUNT_SPEED[0][0])
+        cb = ttk.Combobox(r, textvariable=self.count_speed_var, state="readonly", width=66,
+                          values=[x[0] for x in self.COUNT_SPEED])
+        cb.pack(side="left", padx=6)
+        ToolTip(cb, "Cellpose's time grows with the number of pixels it looks at.\n"
+                    "Our cells are ~85 px across at full size, so 1/4 size (~21 px)\n"
+                    "still finds them. The log warns if cells get too small.\n"
+                    "With a GPU every setting takes seconds.")
         r = ttk.Frame(b2)
         r.pack(fill="x", padx=6, pady=(0, 6))
         ttk.Label(r, text="Cells at the image edge:").pack(side="left")
@@ -1725,6 +1742,7 @@ class CargoGUI:
                 "px_per_um": self.count_px_var.get().strip(),
                 "min_area": self.count_min_var.get().strip(),
                 "edge": self.count_edge_var.get(),
+                "speed": self.count_speed_var.get(),
                 "color": self.count_color_var.get().strip(),
                 "line_width": self.count_lw_var.get().strip(),
                 "opts": {k: v.get() for k, v in self.count_opts.items()}}
@@ -1741,6 +1759,8 @@ class CargoGUI:
         self.count_out_var.set(d.get("output", ""))
         self.count_px_var.set(d.get("px_per_um", self.count_px_var.get()))
         self.count_min_var.set(d.get("min_area", "0"))
+        if d.get("speed") in [x[0] for x in self.COUNT_SPEED]:
+            self.count_speed_var.set(d["speed"])
         if d.get("edge") in [x[0] for x in self.COUNT_EDGE]:
             self.count_edge_var.set(d["edge"])
         self.count_color_var.set(d.get("color", "yellow"))
@@ -1790,6 +1810,9 @@ class CargoGUI:
         cmd = [sys.executable, "-u", os.path.join(self.script_dir, "cell_count.py")] + items
         cmd += ["--edge", edge, "--color", self.count_color_var.get().strip() or "yellow",
                 "--line-width", f"{lw:g}", "--config", cfg]
+        sc = dict(self.COUNT_SPEED).get(self.count_speed_var.get(), 0.0)
+        if sc:
+            cmd += ["--scale", f"{sc:.4g}"]
         if px:
             cmd += ["--px-per-um", f"{px:g}"]
         if mn:
@@ -1870,6 +1893,11 @@ class CargoGUI:
                     tag = ("err" if ("error" in low or "traceback" in low) else
                            "ok" if " counted " in low else
                            "warn" if "warning" in low else None)
+                    if "still segmenting" in low:
+                        # replace the previous heartbeat line instead of adding one
+                        last = self.count_log.get("end-2l", "end-1c")
+                        if "still segmenting" in last:
+                            self.count_log.delete("end-2l", "end-1c")
                     self.count_log.insert("end", s, tag or ())
                     self.count_log.see("end")
         except queue.Empty:
