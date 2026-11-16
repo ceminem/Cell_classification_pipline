@@ -98,15 +98,18 @@ if not errorlevel 1 (
 if errorlevel 1 goto :fail
 
 set "VCR_TRIED="
+set "REINST_TRIED="
 :check
 echo.
 echo Checking the result ^(loading every package once, a few seconds^) ...
 set "PSTAT="
 set "PINFO="
-for /f "usebackq tokens=1-3 delims=|" %%A in (`call "!PY!" "%CD%\tools\env_probe.py"`) do (
+set "PMOD="
+for /f "usebackq tokens=1-4 delims=|" %%A in (`call "!PY!" "%CD%\tools\env_probe.py"`) do (
     if "%%A"=="PROBE" (
         set "PSTAT=%%B"
         set "PINFO=%%C"
+        set "PMOD=%%D"
     )
 )
 if "!PSTAT!"=="OK" (
@@ -123,10 +126,67 @@ if "!PSTAT!"=="MISSING" (
     echo Still missing: !PINFO!
     goto :fail
 )
-if "!PSTAT!"=="BROKEN" (
-    echo Installed, but does not load: !PINFO!
-    if not defined VCR_TRIED goto :vcredist
+if "!PSTAT!"=="BROKEN" goto :broken
+goto :fail
+
+REM ---------------------------------------------------------------------
+REM A package is installed but does not load. Show the full message, then
+REM pick the fix that matches the reason.
+:broken
+echo Installed, but does not load: !PINFO!
+echo.
+call "!PY!" "%CD%\tools\env_probe.py" --detail
+REM test the text through a file - "echo !x! | findstr" loses delayed expansion
+>"%TEMP%\cargo_probe.txt" echo(!PINFO!
+findstr /i /c:"Anwendungssteuerung" /c:"Application Control" /c:"blockiert" /c:"blocked" /c:"Richtlinie" /c:"policy" "%TEMP%\cargo_probe.txt" >nul
+if not errorlevel 1 goto :blocked
+REM "module not found" = a DLL is missing -> Visual C++ runtime, unless it is
+REM installed already (then reinstalling the package is the better guess)
+if not defined VCR_TRIED (
+    findstr /i /c:"Modul wurde nicht gefunden" /c:"module could not be found" "%TEMP%\cargo_probe.txt" >nul
+    if not errorlevel 1 (
+        reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Installed >nul 2>&1
+        if errorlevel 1 goto :vcredist
+        echo The Visual C++ runtime is already installed.
+    )
 )
+if not defined REINST_TRIED goto :reinstall
+goto :fail
+
+REM ---- damaged / quarantined file: reinstall the failing package fresh ----
+:reinstall
+set "REINST_TRIED=1"
+set "FAILMOD=!PMOD!"
+if /i "!FAILMOD!"=="PIL" set "FAILMOD=pillow"
+if not defined FAILMOD goto :fail
+echo.
+echo Reinstalling !FAILMOD! from a fresh download ^(a damaged file, or one an
+echo antivirus program removed, is a common cause^) ...
+"!PY!" -m pip install --force-reinstall --no-cache-dir --no-deps !FAILMOD!
+goto :check
+
+REM ---- Windows refuses to load the file -------------------------------
+:blocked
+echo.
+echo ============================================================
+echo  WINDOWS BLOCKS THESE FILES - nothing is broken in the install.
+echo.
+echo  "Smart App Control" ^(Windows 11^) or a policy of the IT
+echo  department refuses program files that are not signed by a
+echo  known publisher. numpy and PyTorch contain such files.
+echo.
+echo  Your own laptop - switch Smart App Control off:
+echo    Start - "Windows-Sicherheit" - "App- und Browsersteuerung"
+echo    - "Smart App Control" - Einstellungen - "Aus"
+echo    then start "Cargo Analysis.bat" again ^(no new setup needed^).
+echo    Note: on some Windows versions it can only be switched on
+echo    again by resetting Windows.
+echo.
+echo  Laptop managed by the university / company IT:
+echo    ask IT to allow Python packages in
+echo    !CD!\.venv
+echo    or run the analysis on the lab PC.
+echo ============================================================
 goto :fail
 
 REM ---------------------------------------------------------------------
