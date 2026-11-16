@@ -135,6 +135,17 @@ def find_images(inputs, skip_dirs=()):
     return found
 
 
+def sample_of(path, root, several_roots):
+    """The sample an image belongs to, for the batch bar chart: the first
+    folder below the input folder (A1, A2, ... or a condition), or the image
+    itself when it lies directly in the input folder."""
+    rel = os.path.relpath(path, root).replace("\\", "/").split("/")
+    s = rel[0] if len(rel) > 1 else os.path.splitext(rel[-1])[0]
+    if several_roots:
+        s = os.path.basename(os.path.normpath(root)) + " / " + s
+    return s
+
+
 def base_name(path, root):
     """A readable, unique name: the path below the input folder, joined by _."""
     rel = os.path.relpath(os.path.splitext(path)[0], root)
@@ -267,17 +278,43 @@ def cell_table(masks_full, px_per_um, min_area_um2, edge_mode):
         else:
             counted, why = True, ""
         eq_d = 2 * math.sqrt(a_px / math.pi)
+        cx, cy = float(com[i][1]), float(com[i][0])
         rows.append({
-            "label": int(lab), "area_px": round(a_px, 1),
+            "cell_number": "", "mask_label": int(lab),
+            "centre_x_px": round(cx, 1), "centre_y_px": round(cy, 1),
+            "centre_x_um": round(cx / px_per_um, 1) if px_per_um else "",
+            "centre_y_um": round(cy / px_per_um, 1) if px_per_um else "",
+            "area_px": round(a_px, 1),
             "area_um2": round(a_um, 2) if a_um is not None else "",
             "eq_diameter_px": round(eq_d, 2),
             "eq_diameter_um": round(eq_d / px_per_um, 2) if px_per_um else "",
-            "centre_x": round(com[i][1], 1), "centre_y": round(com[i][0], 1),
             "touches_edge": "+".join(edges), "too_small": int(too_small),
             "unbiased_frame": int(unbiased and not too_small),
             "counted": int(counted), "not_counted_because": why,
         })
+    number_cells(rows)
     return rows
+
+
+CELL_COLUMNS = ["cell_number", "mask_label", "centre_x_px", "centre_y_px",
+                "centre_x_um", "centre_y_um", "area_px", "area_um2",
+                "eq_diameter_px", "eq_diameter_um", "touches_edge", "too_small",
+                "unbiased_frame", "counted", "not_counted_because"]
+
+
+def number_cells(rows):
+    """Number the COUNTED cells 1..n in reading order: rows of the image
+    (bands one median cell diameter high) from top to bottom, left to right
+    within a row. The figure writes the same numbers, so a row in the table
+    can be found on the picture. Uncounted objects get no number; their
+    mask_label (the id in the mask file) still identifies them."""
+    cnt = [r for r in rows if r["counted"]]
+    if not cnt:
+        return
+    band = max(float(np.median([r["eq_diameter_px"] for r in cnt])), 1.0)
+    cnt.sort(key=lambda r: (int(r["centre_y_px"] // band), r["centre_x_px"]))
+    for k, r in enumerate(cnt, 1):
+        r["cell_number"] = k
 
 
 def outlines(masks, scale_to_full, smooth=True):
@@ -347,7 +384,7 @@ def draw_figure(gray8, polys, rows, path_base, opt, filled=False):
 
     H, W = gray8.shape
     color = COLORS.get(opt.color, opt.color)
-    counted = {r["label"]: r["counted"] for r in rows}
+    counted = {r["mask_label"]: r["counted"] for r in rows}
     lw_px = float(opt.line_width)
 
     def render(dpi, img, vector):
@@ -379,12 +416,14 @@ def draw_figure(gray8, polys, rows, path_base, opt, filled=False):
                                          joinstyle="round", capstyle="round"))
         fs = max(6.0, W / dpi * 72 * 0.022)   # text ~2.2 % of the width
         if opt.numbers:
-            lookup = {r["label"]: r for r in rows}
-            for l in polys:
-                r = lookup.get(l)
-                if r:
-                    ax.text(r["centre_x"], r["centre_y"], str(l), color=color,
-                            fontsize=fs * 0.35, ha="center", va="center")
+            # the cell numbers of the table (counted cells only)
+            for r in rows:
+                if r["cell_number"] != "" and r["mask_label"] in polys:
+                    ax.text(r["centre_x_px"], r["centre_y_px"], str(r["cell_number"]),
+                            color=color, fontsize=fs * 0.55, fontweight="bold",
+                            ha="center", va="center",
+                            path_effects=[pe.withStroke(linewidth=fs * 0.12,
+                                                        foreground="black")])
         halo = [pe.withStroke(linewidth=fs * 0.18, foreground="black")]
         if opt.count_label:
             n = sum(1 for r in rows if r["counted"])
@@ -426,6 +465,187 @@ def draw_figure(gray8, polys, rows, path_base, opt, filled=False):
                 written.append(path_base + ext)
         plt.close(fig)
     return written
+
+
+# =============================================================== batch summary ==
+def sample_stats(summary):
+    """Per sample: images, mean / SD of the counted cells per image (and of
+    the density). SD only from 2+ images; with one image per sample the bar
+    is that image's value."""
+    order, by = [], {}
+    for r in summary:
+        if r["sample"] not in by:
+            order.append(r["sample"])
+            by[r["sample"]] = []
+        by[r["sample"]].append(r)
+    out = []
+    for name in order:
+        rs = by[name]
+        n = np.array([r["n_counted"] for r in rs], float)
+        d = np.array([r["density_per_mm2"] for r in rs
+                      if r["density_per_mm2"] != ""], float)
+        out.append({
+            "sample": name, "images": len(rs),
+            "cells_mean": round(float(n.mean()), 1),
+            "cells_sd": round(float(n.std(ddof=1)), 1) if len(n) > 1 else "",
+            "cells_total": int(n.sum()),
+            "density_mean": round(float(d.mean()), 1) if len(d) else "",
+            "density_sd": round(float(d.std(ddof=1)), 1) if len(d) > 1 else "",
+            "_cells": n.tolist(), "_density": d.tolist(),
+        })
+    return out
+
+
+def bar_charts(groups, figdir, calibrated):
+    """Bar chart of cells per image (and cells per mm2 when calibrated):
+    bar = mean over the sample's images, error bar = SD (2+ images), dots =
+    the single images. Descriptive only: images of one well are technical
+    replicates, so no significance test is drawn."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    specs = [("_cells", "cells_mean", "cells_sd", "Cells per image",
+              "cell_count_bar_chart")]
+    if calibrated:
+        specs.append(("_density", "density_mean", "density_sd",
+                      "Cells per mm\u00b2", "cell_density_bar_chart"))
+    written = []
+    names = [g["sample"] for g in groups]
+    long_names = max(len(n) for n in names) > 6 or len(names) > 8
+    for raw, mean_k, sd_k, ylab, fname in specs:
+        fig_w = max(3.2, 0.55 * len(groups) + 1.4)
+        fig, ax = plt.subplots(figsize=(fig_w, 3.4), dpi=300)
+        x = np.arange(len(groups))
+        means = [g[mean_k] if g[mean_k] != "" else np.nan for g in groups]
+        sds = [g[sd_k] if g[sd_k] != "" else np.nan for g in groups]
+        ax.bar(x, means, width=0.62, color="#B9CDE0", edgecolor="#1E3A5F",
+               linewidth=0.8, zorder=1)
+        ax.errorbar(x, means, yerr=sds, fmt="none", ecolor="#1E3A5F",
+                    elinewidth=0.9, capsize=3, capthick=0.9, zorder=2)
+        rng = np.random.default_rng(1)
+        for xi, g in zip(x, groups):
+            v = g[raw]
+            if len(v) > 1:
+                jit = rng.uniform(-0.13, 0.13, len(v))
+                ax.scatter(xi + jit, v, s=11, color="#1A242C", zorder=3,
+                           linewidths=0)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{n}\n(n = {g['images']})" for n, g in zip(names, groups)],
+                           rotation=45 if long_names else 0,
+                           ha="right" if long_names else "center", fontsize=8,
+                           rotation_mode="anchor")
+        ax.set_ylabel(ylab, fontsize=9)
+        ax.tick_params(axis="y", labelsize=8)
+        ax.set_ylim(0, None)
+        ax.spines[["top", "right"]].set_visible(False)
+        fig.tight_layout()
+        for ext in (".png", ".pdf"):
+            p = os.path.join(figdir, fname + ext)
+            fig.savefig(p)
+            written.append(p)
+        plt.close(fig)
+    return written
+
+
+def _openpyxl():
+    """openpyxl writes the .xlsx; installed on first use if it is missing
+    (small, pure Python), so older set-ups get it without a new setup."""
+    try:
+        import openpyxl
+        return openpyxl
+    except ImportError:
+        import subprocess
+        print("Installing openpyxl (for the Excel file, once) ...", flush=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "openpyxl"],
+                       check=False)
+        import importlib
+        importlib.invalidate_caches()
+        import openpyxl
+        return openpyxl
+
+
+def write_excel(path, summary, groups, all_cells, calibrated):
+    """One workbook: Summary (per image), Samples (per sample, with a bar
+    chart), and one sheet per image with every cell (cell number, position,
+    size, edge, counted)."""
+    openpyxl = _openpyxl()
+    from openpyxl.chart import BarChart, Reference
+    from openpyxl.chart.error_bar import ErrorBars
+    from openpyxl.chart.data_source import NumDataSource, NumRef
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    head_font = Font(bold=True)
+    head_fill = PatternFill("solid", fgColor="E3EBF0")
+
+    def sheet(ws, columns, rows, widths=None):
+        ws.append(columns)
+        for c in ws[1]:
+            c.font, c.fill = head_font, head_fill
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+        for r in rows:
+            ws.append([None if r.get(k, "") == "" else r.get(k) for k in columns])
+        ws.freeze_panes = "A2"
+        for i, k in enumerate(columns, 1):
+            w = (widths or {}).get(k) or min(max(len(str(k)) + 2, 10), 40)
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    ws = wb.active
+    ws.title = "Summary"
+    sheet(ws, list(summary[0].keys()), summary, {"file": 50, "image": 30, "sample": 18})
+
+    ws2 = wb.create_sheet("Samples")
+    gcols = ["sample", "images", "cells_mean", "cells_sd", "cells_total"]
+    if calibrated:
+        gcols += ["density_mean", "density_sd"]
+    sheet(ws2, gcols, groups, {"sample": 22})
+    if len(groups) >= 1 and len(summary) > 1:
+        n = len(groups)
+        for col, sd_col, title, anchor in (
+                (3, 4, "Cells per image (mean ± SD)", "J2"),
+                ((6, 7, "Cells per mm² (mean ± SD)", "J20") if calibrated else (None,) * 4)):
+            if col is None:
+                continue
+            ch = BarChart()
+            ch.type, ch.style, ch.title = "col", 10, title
+            ch.legend = None
+            ch.y_axis.title = title.split(" (")[0]
+            ch.y_axis.majorGridlines = None
+            ch.y_axis.scaling.min = 0          # bars must start at zero
+            ch.x_axis.delete = False           # newer Excel hides axes otherwise
+            ch.y_axis.delete = False
+            data = Reference(ws2, min_col=col, min_row=1, max_row=n + 1)
+            cats = Reference(ws2, min_col=1, min_row=2, max_row=n + 1)
+            ch.add_data(data, titles_from_data=True)
+            ch.set_categories(cats)
+            letter = get_column_letter(sd_col)
+            ref = NumRef(f"'Samples'!${letter}$2:${letter}${n + 1}")
+            ch.series[0].errBars = ErrorBars(errDir="y", errValType="cust",
+                                             errBarType="both", noEndCap=False,
+                                             plus=NumDataSource(numRef=ref),
+                                             minus=NumDataSource(numRef=ref))
+            ch.height, ch.width = 8, max(10, 1.6 * n + 4)
+            ws2.add_chart(ch, anchor)
+
+    used = set()
+    for k, (name, rows) in enumerate(all_cells.items(), 1):
+        t = f"{k} {name}"
+        for ch_ in '[]:*?/\\':
+            t = t.replace(ch_, "-")
+        t = t[:31]
+        while t in used:
+            t = t[:29] + f"{len(used) % 100:02d}"
+        used.add(t)
+        wsx = wb.create_sheet(t)
+        cols = [c for c in CELL_COLUMNS if calibrated or not c.endswith("_um")
+                and c != "area_um2"]
+        ordered = sorted(rows, key=lambda r: (r["cell_number"] == "",
+                                              r["cell_number"] or 0, r["mask_label"]))
+        sheet(wsx, cols, ordered)
+    wb.save(path)
+    return path
 
 
 # ======================================================================= main ==
@@ -497,6 +717,8 @@ def main(argv=None):
 
     holder = {"model": None}
     summary, failed = [], []
+    all_cells = {}
+    several_roots = len({os.path.normcase(r) for _, r in images}) > 1
     names_used = set()
     t_all = time.time()
     for i, (path, root) in enumerate(images, 1):
@@ -540,12 +762,10 @@ def main(argv=None):
 
             with open(os.path.join(dirs["cells"], name + "_cells.csv"), "w",
                       newline="", encoding="utf-8") as fh:
-                cols = ["label", "area_px", "area_um2", "eq_diameter_px", "eq_diameter_um",
-                        "centre_x", "centre_y", "touches_edge", "too_small",
-                        "unbiased_frame", "counted", "not_counted_because"]
-                w = csv.DictWriter(fh, fieldnames=cols)
+                w = csv.DictWriter(fh, fieldnames=CELL_COLUMNS)
                 w.writeheader()
                 w.writerows(rows)
+            all_cells[name] = rows
 
             interior = [r for r in rows if not r["touches_edge"] and not r["too_small"]]
             n_obj = len(rows)
@@ -556,6 +776,7 @@ def main(argv=None):
             med_a = float(np.median([r["area_px"] for r in interior])) if interior else float("nan")
             area_mm2 = (H * W) / (opt.px_per_um ** 2) / 1e6 if opt.px_per_um else None
             row = {
+                "sample": sample_of(path, root, several_roots),
                 "image": name, "file": path, "width_px": W, "height_px": H,
                 "n_objects": n_obj, "n_touching_edge": n_edge, "n_too_small": n_small,
                 "edge_rule": opt.edge, "n_counted": n_count, "n_unbiased_frame": n_unb,
@@ -599,7 +820,24 @@ def main(argv=None):
         print("=" * 60)
         print(f"{len(summary)} image(s) counted in {time.time() - t_all:.0f} s"
               + (f", {len(failed)} failed: {', '.join(failed)}" if failed else ""))
+        groups = sample_stats(summary)
+        charts = []
+        if len(summary) > 1:
+            try:
+                charts = bar_charts(groups, dirs["figures"], bool(opt.px_per_um))
+            except Exception as exc:
+                print(f"WARNING: bar chart failed: {exc}")
+        xl = None
+        try:
+            xl = write_excel(os.path.join(out, "cell_count.xlsx"), summary, groups,
+                             all_cells, bool(opt.px_per_um))
+        except Exception as exc:
+            print(f"WARNING: Excel file not written: {exc}")
         print(f"Summary : {sp}")
+        if xl:
+            print(f"Excel   : {xl}")
+        for c in charts:
+            print(f"Chart   : {c}")
         print(f"Figures : {dirs['figures']}")
     else:
         raise SystemExit("ERROR: no image could be counted - see the messages above.")

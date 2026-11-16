@@ -102,8 +102,13 @@ For images that have only brightfield (no fluorescence):
 5. *Count cells*. The preview on the right shows each figure; check that the
    outlines fit before using the numbers.
 6. *Open results folder* → `cell_count`:
-   `cell_count_summary.csv` (counts, density, cell size), `figures/` (PNG and
-   PDF for the paper; the PDF outlines are vector lines), `masks/`, `cells/`.
+   **`cell_count.xlsx`** (Summary, Samples with bar chart, one sheet per image
+   with every cell: number, position, size), `figures/` (PNG and PDF for the
+   paper; the PDF outlines are vector lines; with several images also
+   `cell_count_bar_chart`), `masks/`, and the same tables as CSV.
+   For a batch, put each sample's images in its own folder (A1, A2, … or a
+   condition name) under one parent folder and add the parent folder: one bar
+   per sample folder.
 
 Changing only the figure (colour, line width, labels) is quick: the masks are
 reused. Tick *segment again* after changing Cellpose settings.

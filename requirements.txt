@@ -4,7 +4,8 @@ numpy
 scipy
 tifffile
 pillow
-matplotlib           # Figures tab only
+matplotlib           # Figures tab, cell-count figures
+openpyxl             # Excel output of the cell count
 
 # CNN classifier (cargo_cnn/) uses the same torch that Cellpose installs.
 # No extra packages are needed.

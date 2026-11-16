@@ -1262,6 +1262,27 @@ looks the same at every output size.
 - Counted cells in the chosen colour; uncounted ones (edge, debris) grey and
   dashed, or hidden. Scale bar: a round length of about 18 % of the width.
 
+**Cell numbers.** Counted cells are numbered 1…n in reading order: bands one
+median cell diameter high, top to bottom, left to right within a band. The
+same numbers appear on the figure (*number every cell*) and in column
+`cell_number` of the cell table; `mask_label` is the id in the mask file
+(also for uncounted objects). Positions are given in pixels and, when
+calibrated, in µm from the top-left corner.
+
+**Batch bar chart.** With more than one image, images are grouped by
+*sample*: the first folder below the input folder (A1, A2, … or a condition
+folder), or the image itself when it lies directly in the input folder. Per
+sample: mean of counted cells per image, SD over its images (2+ images),
+each image as a dot, number of images under the name; a second chart with
+cells per mm² when calibrated. Descriptive only, no significance test:
+fields of one well are technical replicates, not independent samples.
+Files `figures/cell_count_bar_chart.png/.pdf`, `cell_density_bar_chart…`.
+
+**Excel.** `cell_count.xlsx`: *Summary* (one row per image), *Samples*
+(mean, SD, total per sample, with the bar charts as Excel charts), and one
+sheet per image with every cell. openpyxl is installed automatically on
+first use if it is missing.
+
 **Outputs** in `<results>/cell_count/`: `cell_count_summary.csv` (per image:
 objects, at edge, too small, counted, unbiased count, coverage, median
 area/diameter, field area, density, Cellpose settings), `cells/*_cells.csv`

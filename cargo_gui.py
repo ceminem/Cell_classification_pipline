@@ -1907,10 +1907,11 @@ class CargoGUI:
     def _count_find_figs(self):
         d = os.path.join(self._count_outdir(), "figures")
         try:
-            # outline figures first, filled masks after them
+            # batch bar charts first, then outline figures, filled masks last
             self.count_figs = sorted((os.path.join(d, n) for n in os.listdir(d)
                                       if n.lower().endswith(".png")),
-                                     key=lambda p: (p.endswith("_mask.png"), p))
+                                     key=lambda p: ("bar_chart" not in p,
+                                                    p.endswith("_mask.png"), p))
         except OSError:
             self.count_figs = []
         self.count_idx = 0
