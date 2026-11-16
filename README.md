@@ -16,11 +16,10 @@ released → per-well percentages → figures with honest statistics.**
 
 ## Start
 
-```
-conda activate rocm312
-pip install -r requirements.txt
-```
-Double-click **`Cargo Analysis.bat`** → *Setup check* → *Run*.
+Double-click **`Cargo Analysis.bat`**. It finds the right environment by
+itself (conda anywhere, or none). On a new computer it offers to install
+everything once (`Setup on this PC.bat`). Then *Setup check* → *Run*.
+Details, also for a laptop: `GETTING_STARTED.md`, Part 1b.
 
 Command line:
 ```

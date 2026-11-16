@@ -9,6 +9,13 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- **Runs on any Windows PC** (e.g. a laptop): the launcher finds conda in
+  every usual place (PATH, registry, Anaconda / Miniconda / Miniforge /
+  Mambaforge folders, `conda_path.txt` for unusual places) and also works
+  **without conda**. `Setup on this PC.bat` installs everything once (conda
+  environment `cargo`, or `.venv` with a normal Python, installing Python
+  3.12 by winget if needed; CUDA PyTorch on NVIDIA, CPU otherwise); the
+  launcher offers to run it. Fixes *"conda.bat not found"* on the ThinkPad.
 - CNN training reports **two tests**: same conditions/unseen cells (each field
   split in halves) and unseen condition (leave one field out), each with a
   **brightness-threshold yardstick** learned on the same training cells.

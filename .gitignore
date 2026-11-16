@@ -42,3 +42,8 @@ models/
 
 # the launcher remembers the environment it chose (machine-specific)
 launcher_environment.txt
+
+# a Python environment made by "Setup on this PC.bat" (machine-specific)
+.venv/
+# conda folder for unusual install places (machine-specific)
+conda_path.txt

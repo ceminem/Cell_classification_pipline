@@ -27,6 +27,37 @@ so an older copy of a file can never be started by accident.
 
 ---
 
+## Part 1b — A second computer (laptop, e.g. the ThinkPad)
+
+1. Install GitHub Desktop and clone the repository exactly as in Part 1
+   (steps 1–4).
+2. Double-click **`Cargo Analysis.bat`**.
+   - **conda is found anywhere**: Anaconda, Miniconda, Miniforge or
+     Mambaforge, for your user or for all users, on C: or D:, via the
+     PATH, the registry or the usual folders.
+   - **No environment with Cellpose yet?** It asks *Set it up now [Y,N]?* →
+     press **Y**. `Setup on this PC.bat` then installs everything once
+     (about 1–3 GB, 5–20 minutes, internet needed):
+     - with conda: a new environment **`cargo`**;
+     - without conda: a **`.venv`** folder inside the program folder, using
+       Python 3.10–3.12; if no Python is installed it offers to install
+       Python 3.12 for your user with *winget* (no admin rights).
+   - Then the program starts. Later starts are quick.
+3. Laptop graphics (Intel / AMD integrated) → the analysis runs on the
+   **CPU**: it works and gives the same results, only slower (Cellpose
+   several minutes per image instead of seconds). An NVIDIA card is used
+   automatically (the setup installs the CUDA build of PyTorch for it).
+4. The first Cellpose run downloads its model (~1 GB) once.
+5. Settings that belong to one computer (data folders, Fiji path) are set in
+   the program on each computer; they are not shared through GitHub.
+
+**conda installed in an unusual place** and still not found: write the conda
+folder (the one that contains `condabin`, e.g. `D:\Programs\miniconda3`) as
+the only line of a text file **`conda_path.txt`** next to the `.bat`. To find
+it: Start menu → *Anaconda Prompt* / *Miniforge Prompt* → type `where conda`.
+
+---
+
 ## Part 2 — Start the program
 
 Double-click **`Cargo Analysis.bat`** (or its desktop shortcut).
@@ -161,7 +192,10 @@ a figure**, so the result points to saved code.
 |---|---|
 | CNN tab says *CPU only* | start with `Cargo Analysis.bat`, not by double-clicking a `.py` |
 | `.bat` picks the wrong environment | create `launcher_environment.txt` next to the `.bat` containing just `rocm312`; delete the file to let it search again. Don't edit the `.bat` itself (that blocks updates) |
-| `.bat`: *No conda environment has everything…* | `conda activate rocm312` then `pip install cellpose tifffile pillow scipy matplotlib` |
+| `.bat`: *No environment has everything…* | run `Setup on this PC.bat`, or `conda activate rocm312` then `pip install -r requirements.txt` |
+| `.bat`: *conda.bat not found* (old launcher) | update (GitHub Desktop → *Pull origin*); the new launcher searches everywhere and works without conda |
+| conda installed but not found | put the conda folder into `conda_path.txt` (see Part 1b) |
+| everything runs on *CPU only* on the laptop | expected without an NVIDIA/AMD-ROCm GPU; results are identical, only slower |
 | training: *could not find the fluorescence image / mask* | that field was not analysed yet, or its files were moved — run the analysis on it |
 | training: *…mask was probably re-segmented… SKIPPED* | the labels belong to an older mask; label that field again |
 | training: *Only N labelled cells - too few* | label more cells (blind mode!) |
