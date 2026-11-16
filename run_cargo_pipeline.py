@@ -171,12 +171,14 @@ def apply_settings(overrides):
 
 # --------------------------------------------------------------------------
 def find_fiji_executable(fiji_dir):
-    """Fiji renamed its launcher across versions, so try the known names."""
+    """Fiji renamed its launcher across versions, so try the known names.
+    Plain ImageJ 1.x (ImageJ.exe) works too; see run_imagej for its options."""
     candidates = [
         "ImageJ-win64.exe",
         "fiji-windows-x64.exe",
         "ImageJ-win32.exe",
         "fiji-windows-x86.exe",
+        "ImageJ.exe",            # plain ImageJ 1.x (not Fiji)
     ]
     for name in candidates:
         path = os.path.join(fiji_dir, name)
@@ -650,10 +652,15 @@ def run_imagej(fiji_exe, macro_path, fluor_path, mask_path, out_dir, base,
     #   -Djava.awt.headless=false : keep AWT usable for the ROI Manager
     #   -Dapple.awt.UIElement / -Dsun.java2d.noddraw : keep the window out of
     #                          the way on macOS/Windows respectively
-    cmd = [fiji_exe,
-           f"--mem={mem_mb}m",
-           "--no-splash",
-           "-batch", macro_path, macro_args]
+    if os.path.basename(fiji_exe).lower() == "imagej.exe":
+        # ImageJ 1.x launcher: no --mem / --no-splash options (they would be
+        # read as files to open); its memory is set in ImageJ.cfg instead.
+        cmd = [fiji_exe, "-batch", macro_path, macro_args]
+    else:
+        cmd = [fiji_exe,
+               f"--mem={mem_mb}m",
+               "--no-splash",
+               "-batch", macro_path, macro_args]
 
     summary_file = os.path.join(out_dir, base + "_summary.csv")
     log_file = os.path.join(out_dir, base + "_log.txt")

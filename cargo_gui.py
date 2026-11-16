@@ -302,14 +302,15 @@ class CargoGUI:
 
         row = ttk.Frame(pbox)
         row.pack(fill="x", padx=6, pady=4)
-        ttk.Label(row, text="Fiji folder:", width=14).pack(side="left")
+        ttk.Label(row, text="Fiji / ImageJ:", width=14).pack(side="left")
         self.fiji_var = tk.StringVar()
         ttk.Entry(row, textvariable=self.fiji_var).pack(
             side="left", fill="x", expand=True, padx=4)
         ttk.Button(row, text="Browse...", command=self._pick_fiji).pack(side="left")
 
         ttk.Label(pbox,
-                  text="The folder containing fiji-windows-x64.exe (or ImageJ-win64.exe).",
+                  text="Optional - the analysis runs in Python and does not need it. Folder with "
+                       "fiji-windows-x64.exe / ImageJ-win64.exe (Fiji) or ImageJ.exe (ImageJ 1.x).",
                   foreground="#666").pack(anchor="w", padx=10, pady=(0, 4))
 
         tbox = ttk.LabelFrame(f, text="Analysis parameters  (hover each for an explanation)")
@@ -1584,7 +1585,7 @@ class CargoGUI:
             self._scan_samples()
 
     def _pick_fiji(self):
-        d = filedialog.askdirectory(title="Choose the Fiji folder")
+        d = filedialog.askdirectory(title="Choose the Fiji or ImageJ folder")
         if d:
             self.fiji_var.set(os.path.normpath(d))
 
@@ -1868,27 +1869,34 @@ class CargoGUI:
         except ImportError:
             self._sput("  torch      MISSING (installed with cellpose)", bad)
 
-        # Fiji
+        # Fiji / ImageJ - OPTIONAL. Measurement runs in Python (numpy); Fiji is
+        # only used by the old macro backend (USE_FIJI = True in
+        # run_cargo_pipeline.py), which nothing uses by default. So a missing
+        # Fiji is never an error, and plain ImageJ 1.x (ImageJ.exe) counts too.
         self._sput("")
         fiji_dir = getattr(self, "_setup_fiji", "")
+        note = "  (optional - the analysis does not need Fiji or ImageJ)"
         if not fiji_dir:
-            self._sput("Fiji folder not set (Settings tab).", bad)
+            self._sput("Fiji / ImageJ: not set" + note, ok)
         elif not os.path.isdir(fiji_dir):
-            self._sput(f"Fiji folder does not exist: {fiji_dir}", bad)
+            self._sput(f"Fiji / ImageJ folder does not exist: {fiji_dir}" + note, "warn")
         else:
             names = ["fiji-windows-x64.exe", "ImageJ-win64.exe",
                      "fiji-windows-x86.exe", "ImageJ-win32.exe",
-                     "ImageJ-linux64", "Contents/MacOS/ImageJ-macosx"]
+                     "ImageJ-linux64", "Contents/MacOS/ImageJ-macosx",
+                     "ImageJ.exe"]
             found = None
             for n in names:
                 p = os.path.join(fiji_dir, n)
                 if os.path.isfile(p):
                     found = p
                     break
-            if found:
-                self._sput(f"Fiji    : {found}", ok)
+            if found and os.path.basename(found) == "ImageJ.exe":
+                self._sput(f"ImageJ  : {found}  (ImageJ 1.x)" + note, ok)
+            elif found:
+                self._sput(f"Fiji    : {found}" + note, ok)
             else:
-                self._sput(f"No Fiji launcher in {fiji_dir}", bad)
+                self._sput(f"No Fiji or ImageJ launcher in {fiji_dir}" + note, "warn")
                 try:
                     self._sput("  contains: " + ", ".join(sorted(os.listdir(fiji_dir))[:20]))
                 except OSError:
@@ -1902,8 +1910,8 @@ class CargoGUI:
         p = os.path.join(self.script_dir, MACRO_FILE)
         self._sput(f"{MACRO_FILE}: "
                    + ("found" if os.path.isfile(p) else
-                      "not present (only needed for the legacy Fiji backend)"),
-                   ok if os.path.isfile(p) else "warn")
+                      "not present (only needed for the old Fiji backend - fine)"),
+                   ok if os.path.isfile(p) else None)
 
         # optional modules - report WHERE each was loaded from, because the
         # commonest cause of "the tab is not there" is an older copy of a file

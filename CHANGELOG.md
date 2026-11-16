@@ -9,6 +9,9 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- Fiji is shown as **optional** everywhere (the analysis runs in Python and
+  never needed it); plain **ImageJ 1.x** (`ImageJ.exe`) is accepted as well,
+  also by the old macro backend (started without Fiji-only options).
 - **Runs on any Windows PC** (e.g. a laptop): the launcher finds conda in
   every usual place (PATH, registry, Anaconda / Miniconda / Miniforge /
   Mambaforge folders, `conda_path.txt` for unusual places) and also works

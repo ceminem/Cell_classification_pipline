@@ -195,6 +195,7 @@ a figure**, so the result points to saved code.
 | `.bat`: *No environment has everything…* | run `Setup on this PC.bat`, or `conda activate rocm312` then `pip install -r requirements.txt` |
 | `.bat`: *conda.bat not found* (old launcher) | update (GitHub Desktop → *Pull origin*); the new launcher searches everywhere and works without conda |
 | *installed but does not load: … DLL load failed …* | start `Cargo Analysis.bat` → **Y** → setup offers the Microsoft Visual C++ runtime → **Y** (asks for admin once). Or install <https://aka.ms/vs/17/release/vc_redist.x64.exe> by hand |
+| *No Fiji launcher in …* (older version) | harmless: the analysis does not use Fiji. Current version accepts Fiji or ImageJ 1.x (`ImageJ.exe`), or no folder at all |
 | conda installed but not found | put the conda folder into `conda_path.txt` (see Part 1b) |
 | everything runs on *CPU only* on the laptop | expected without an NVIDIA/AMD-ROCm GPU; results are identical, only slower |
 | training: *could not find the fluorescence image / mask* | that field was not analysed yet, or its files were moved — run the analysis on it |
