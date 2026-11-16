@@ -43,8 +43,18 @@ except ImportError:
 
 try:
     import numpy as np
-except ImportError:
-    sys.exit("ERROR: numpy is required.")
+except Exception as exc:          # ImportError, or RuntimeError (unsupported CPU)
+    # Say WHY: "not installed" and "installed but its DLLs do not load" need
+    # different fixes, and the second is the usual one on a fresh Windows PC.
+    msg = str(exc)
+    hint = ("numpy is installed but does not load. On Windows this is almost\n"
+            "always the missing Microsoft Visual C++ runtime. Install it from\n"
+            "    https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+            "or run \"Setup on this PC.bat\" again, which offers to install it."
+            if ("DLL" in msg or "dll" in msg) else
+            "Run \"Setup on this PC.bat\", or in your environment:\n"
+            "    pip install -r requirements.txt")
+    sys.exit(f"ERROR: numpy could not be loaded:\n    {msg}\n\n{hint}")
 
 # The figures tab is optional: matplotlib is not needed to run an analysis, so
 # a missing install degrades to a message in that tab rather than stopping the

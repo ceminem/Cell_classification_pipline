@@ -67,6 +67,7 @@ set "BEST_GPU=CPU only"
 set "BEST_PREFIX="
 set "BEST_PY="
 set "MEM_OK="
+set "BROKEN_SEEN="
 
 REM ---- 0. an environment inside this folder (.venv) -------------------
 if exist "!CD!\.venv\Scripts\python.exe" (
@@ -130,7 +131,12 @@ REM ---- 3. nothing usable: offer the one-time setup --------------------
 if not defined BEST_ENV if not defined TRIED_SETUP (
     echo.
     echo ============================================================
-    echo  This PC has no Python environment with Cellpose yet.
+    if defined BROKEN_SEEN (
+        echo  An environment is installed but does not load ^(see above^).
+        echo  Setup can repair it ^(Visual C++ runtime, packages^).
+    ) else (
+        echo  This PC has no Python environment with Cellpose yet.
+    )
     echo  "Setup on this PC.bat" can install everything once
     echo  ^(about 1-3 GB download, 5-20 minutes^).
     echo ============================================================
@@ -234,6 +240,11 @@ if not defined STATUS (
 )
 if "!STATUS!"=="MISSING" (
     echo    !LABEL! - missing: !INFO!
+    exit /b 0
+)
+if "!STATUS!"=="BROKEN" (
+    echo    !LABEL! - installed but does not load: !INFO!
+    set "BROKEN_SEEN=!INFO!"
     exit /b 0
 )
 if "!INFO:~0,4!"=="GPU " (

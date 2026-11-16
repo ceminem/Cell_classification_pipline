@@ -97,21 +97,61 @@ if not errorlevel 1 (
 "!PY!" -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
 
+set "VCR_TRIED="
+:check
 echo.
-echo Checking the result ...
+echo Checking the result ^(loading every package once, a few seconds^) ...
+set "PSTAT="
+set "PINFO="
 for /f "usebackq tokens=1-3 delims=|" %%A in (`call "!PY!" "%CD%\tools\env_probe.py"`) do (
-    if "%%B"=="OK" (
-        echo.
-        echo ============================================================
-        echo  Ready.  Compute: %%C
-        echo  Start the program with  "Cargo Analysis.bat".
-        echo ============================================================
-        echo.
-        if not defined QUIET pause
-        endlocal & exit /b 0
+    if "%%A"=="PROBE" (
+        set "PSTAT=%%B"
+        set "PINFO=%%C"
     )
-    if "%%B"=="MISSING" echo Still missing: %%C
 )
+if "!PSTAT!"=="OK" (
+    echo.
+    echo ============================================================
+    echo  Ready.  Compute: !PINFO!
+    echo  Start the program with  "Cargo Analysis.bat".
+    echo ============================================================
+    echo.
+    if not defined QUIET pause
+    endlocal & exit /b 0
+)
+if "!PSTAT!"=="MISSING" (
+    echo Still missing: !PINFO!
+    goto :fail
+)
+if "!PSTAT!"=="BROKEN" (
+    echo Installed, but does not load: !PINFO!
+    if not defined VCR_TRIED goto :vcredist
+)
+goto :fail
+
+REM ---------------------------------------------------------------------
+REM numpy / torch / opencv need the Microsoft Visual C++ runtime. A fresh
+REM Windows often lacks it: "DLL load failed while importing ...".
+:vcredist
+set "VCR_TRIED=1"
+echo.
+echo ============================================================
+echo  This is almost always the missing Microsoft Visual C++
+echo  runtime ^(free, from Microsoft, needed by numpy and PyTorch^).
+echo  Installing it asks once for administrator permission.
+echo ============================================================
+choice /c YN /m "Install the Visual C++ runtime now"
+if errorlevel 2 goto :vcmanual
+where winget >nul 2>&1
+if errorlevel 1 goto :vcmanual
+winget install -e --id Microsoft.VCRedist.2015+.x64 --accept-package-agreements --accept-source-agreements
+REM winget also returns non-zero when it is already installed - check again either way
+goto :check
+
+:vcmanual
+echo.
+echo Download and run:  https://aka.ms/vs/17/release/vc_redist.x64.exe
+echo then start "Cargo Analysis.bat" again.
 goto :fail
 
 REM ---------------------------------------------------------------------

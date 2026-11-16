@@ -16,6 +16,12 @@ Analysis version unchanged (3.1): rule results are identical to before.
   environment `cargo`, or `.venv` with a normal Python, installing Python
   3.12 by winget if needed; CUDA PyTorch on NVIDIA, CPU otherwise); the
   launcher offers to run it. Fixes *"conda.bat not found"* on the ThinkPad.
+- Environment check now **loads** every package instead of only looking it
+  up, so an environment that is installed but crashes is reported as
+  *installed but does not load: <reason>* and never started. When the reason
+  is a missing DLL, setup offers to install the Microsoft Visual C++ runtime
+  (winget). The program prints the real numpy error instead of
+  *"numpy is required"*.
 - CNN training reports **two tests**: same conditions/unseen cells (each field
   split in halves) and unseen condition (leave one field out), each with a
   **brightness-threshold yardstick** learned on the same training cells.
