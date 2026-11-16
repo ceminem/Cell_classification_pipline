@@ -9,6 +9,13 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Added
+- **Cell count** (tab + `cell_count.py`): brightfield-only images are
+  segmented with Cellpose (same settings as the analysis) and counted; edge
+  rule all / complete cells only / unbiased counting frame, minimum area,
+  density per mm², cell size. Paper figures: smooth outlines just inside each
+  cell, PNG at full resolution and PDF/SVG with vector outlines, scale bar,
+  n label, optional filled-mask figure and cell numbers. Per-cell and summary
+  CSV, 16-bit masks; masks are reused when only the figure changes.
 - Fiji is shown as **optional** everywhere (the analysis runs in Python and
   never needed it); plain **ImageJ 1.x** (`ImageJ.exe`) is accepted as well,
   also by the old macro backend (started without Fiji-only options).

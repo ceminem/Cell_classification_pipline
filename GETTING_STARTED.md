@@ -89,6 +89,25 @@ samples → *Run analysis*.
 
 ---
 
+## Part 3b — Counting cells in brightfield images (Cell count tab)
+
+For images that have only brightfield (no fluorescence):
+
+1. **Cell count** tab → *Add folder…* (or *Add images…*).
+2. *Pixels per µm*: `2.6428` for the 20x objective (change for others).
+3. *Cells at the image edge*: *Count every cell* for the number in the
+   field; *Counting frame* for cells per mm² (unbiased).
+4. *Count cells*. The preview on the right shows each figure; check that the
+   outlines fit before using the numbers.
+5. *Open results folder* → `cell_count`:
+   `cell_count_summary.csv` (counts, density, cell size), `figures/` (PNG and
+   PDF for the paper; the PDF outlines are vector lines), `masks/`, `cells/`.
+
+Changing only the figure (colour, line width, labels) is quick: the masks are
+reused. Tick *segment again* after changing Cellpose settings.
+
+---
+
 ## Part 4 — The CNN, step by step (CNN tab)
 
 The line at the top must say **Compute device: GPU – AMD Radeon RX 7800 XT

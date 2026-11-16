@@ -187,12 +187,14 @@ class CargoGUI:
         nb.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.tab_run = ttk.Frame(nb)
+        self.tab_count = ttk.Frame(nb)
         self.tab_settings = ttk.Frame(nb)
         self.tab_labels = ttk.Frame(nb)
         self.tab_plot = ttk.Frame(nb)
         self.tab_cnn = ttk.Frame(nb)
         self.tab_setup = ttk.Frame(nb)
         nb.add(self.tab_run, text="  Run  ")
+        nb.add(self.tab_count, text="  Cell count  ")
         nb.add(self.tab_labels, text="  Sample names  ")
         nb.add(self.tab_settings, text="  Settings  ")
         nb.add(self.tab_plot, text="  Figures  ")
@@ -200,6 +202,7 @@ class CargoGUI:
         nb.add(self.tab_setup, text="  Setup check  ")
 
         self._build_run_tab()
+        self._build_count_tab()
         self._build_settings_tab()
         self._build_labels_tab()
         self._build_plot_tab()
@@ -1546,6 +1549,351 @@ class CargoGUI:
         except queue.Empty:
             pass
         self.root.after(150, self._cnn_poll)
+
+    # ========================================================= cell count ===
+    COUNT_EDGE = [
+        ("Count every cell", "all"),
+        ("Only cells completely inside the image", "exclude"),
+        ("Counting frame: top/right edge count, bottom/left not (cells per area)", "unbiased"),
+    ]
+    COUNT_SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "cellcount_settings.json")
+
+    def _build_count_tab(self):
+        f = self.tab_count
+        self.count_queue = queue.Queue()
+        self.count_proc = None
+        self.count_figs = []
+        self.count_idx = 0
+        self.count_photo = None
+
+        ttk.Label(f, justify="left", wraplength=820, foreground="#444",
+                  text="Brightfield images only: Cellpose finds the cells, they are "
+                       "counted, and figures with clean cell outlines are saved as PNG "
+                       "(full resolution) and PDF (vector outlines, for papers). Uses "
+                       "the Cellpose settings from the Settings tab.")\
+            .pack(anchor="w", padx=8, pady=(8, 2))
+
+        b1 = ttk.LabelFrame(f, text="1. Images")
+        b1.pack(fill="x", padx=8, pady=4)
+        r = ttk.Frame(b1)
+        r.pack(fill="x", padx=6, pady=4)
+        self.count_list = tk.Listbox(r, height=4, font=("Consolas", 8),
+                                     selectmode="extended")
+        self.count_list.pack(side="left", fill="x", expand=True)
+        col = ttk.Frame(r)
+        col.pack(side="left", padx=4)
+        ttk.Button(col, text="Add folder...", command=self._count_add_folder).pack(fill="x")
+        ttk.Button(col, text="Add images...", command=self._count_add_files)\
+            .pack(fill="x", pady=2)
+        ttk.Button(col, text="Remove", command=lambda: [
+            self.count_list.delete(i) for i in reversed(self.count_list.curselection())])\
+            .pack(fill="x")
+        ttk.Label(b1, foreground="#666", font=("Segoe UI", 8), justify="left",
+                  text="Folders are searched with their subfolders. Where channels are "
+                       "named (A1_brightfield / A1_fluorescence) only the brightfield is "
+                       "used.").pack(anchor="w", padx=8, pady=(0, 4))
+        r = ttk.Frame(b1)
+        r.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Label(r, text="Save results to:").pack(side="left")
+        self.count_out_var = tk.StringVar()
+        ttk.Entry(r, textvariable=self.count_out_var).pack(
+            side="left", fill="x", expand=True, padx=4)
+        ttk.Button(r, text="Browse...", command=lambda: self._cnn_pick_dir(
+            self.count_out_var, "Folder for the cell_count results")).pack(side="left")
+        ttk.Label(r, text="(empty = next to the first folder)", foreground="#666")\
+            .pack(side="left", padx=4)
+
+        b2 = ttk.LabelFrame(f, text="2. Counting")
+        b2.pack(fill="x", padx=8, pady=4)
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=4)
+        ttk.Label(r, text="Pixels per µm:").pack(side="left")
+        self.count_px_var = tk.StringVar(value="2.6428")
+        e = ttk.Entry(r, textvariable=self.count_px_var, width=9)
+        e.pack(side="left", padx=4)
+        ToolTip(e, "Image calibration. 2.6428 px/µm = 20x objective on our "
+                   "microscope;\nchange it for other objectives. Empty = no scale "
+                   "bar, sizes in pixels.")
+        ttk.Label(r, text="Ignore objects smaller than").pack(side="left", padx=(16, 4))
+        self.count_min_var = tk.StringVar(value="0")
+        e = ttk.Entry(r, textvariable=self.count_min_var, width=7)
+        e.pack(side="left")
+        ttk.Label(r, text="µm²  (debris; 0 = keep all)").pack(side="left", padx=4)
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Label(r, text="Cells at the image edge:").pack(side="left")
+        self.count_edge_var = tk.StringVar(value=self.COUNT_EDGE[0][0])
+        ttk.Combobox(r, textvariable=self.count_edge_var, state="readonly", width=66,
+                     values=[x[0] for x in self.COUNT_EDGE]).pack(side="left", padx=6)
+
+        b3 = ttk.LabelFrame(f, text="3. Figure")
+        b3.pack(fill="x", padx=8, pady=4)
+        r = ttk.Frame(b3)
+        r.pack(fill="x", padx=6, pady=4)
+        ttk.Label(r, text="Outline colour:").pack(side="left")
+        self.count_color_var = tk.StringVar(value="yellow")
+        ttk.Combobox(r, textvariable=self.count_color_var, width=9,
+                     values=["yellow", "cyan", "magenta", "green", "red", "orange",
+                             "blue", "white", "black"]).pack(side="left", padx=4)
+        ttk.Label(r, text="Line width (image px):").pack(side="left", padx=(12, 4))
+        self.count_lw_var = tk.StringVar(value="3")
+        ttk.Spinbox(r, from_=1, to=12, increment=0.5, textvariable=self.count_lw_var,
+                    width=5).pack(side="left")
+        self.count_opts = {}
+        rows = (((("count_label", "n = … label", True),
+                  ("scale_bar", "scale bar", True),
+                  ("show_uncounted", "show uncounted cells dashed", True))),
+                ((("numbers", "number every cell", False),
+                  ("filled", "extra figure: filled mask", False),
+                  ("svg", "also SVG", False))))
+        for row in rows:
+            r = ttk.Frame(b3)
+            r.pack(fill="x", padx=6, pady=(0, 4))
+            for key, text, default in row:
+                v = tk.BooleanVar(value=default)
+                self.count_opts[key] = v
+                ttk.Checkbutton(r, text=text, variable=v).pack(side="left", padx=(0, 14))
+
+        r = ttk.Frame(f)
+        r.pack(fill="x", padx=8, pady=4)
+        self.count_btn = ttk.Button(r, text="Count cells", command=self._count_run)
+        self.count_btn.pack(side="left")
+        self.count_force_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(r, text="segment again (ignore saved masks)",
+                        variable=self.count_force_var).pack(side="left", padx=8)
+        self.count_stop_btn = ttk.Button(r, text="Stop", state="disabled",
+                                         command=self._count_stop)
+        self.count_stop_btn.pack(side="left")
+        ttk.Button(r, text="Open results folder", command=lambda: self._open_path(
+            self._count_outdir())).pack(side="left", padx=6)
+        self.count_status = ttk.Label(r, text="", foreground="#666")
+        self.count_status.pack(side="right")
+
+        pw = ttk.PanedWindow(f, orient="horizontal")
+        pw.pack(fill="both", expand=True, padx=8, pady=(2, 8))
+        self.count_log = scrolledtext.ScrolledText(pw, height=10, width=60, wrap="word",
+                                                   font=("Consolas", 9))
+        self.count_log.tag_config("err", foreground="#c00000")
+        self.count_log.tag_config("ok", foreground="#008000")
+        self.count_log.tag_config("warn", foreground="#b06000")
+        pw.add(self.count_log, weight=1)
+        prev = ttk.Frame(pw)
+        pw.add(prev, weight=1)
+        nav = ttk.Frame(prev)
+        nav.pack(fill="x")
+        ttk.Button(nav, text="<", width=3, command=lambda: self._count_show(-1))\
+            .pack(side="left")
+        ttk.Button(nav, text=">", width=3, command=lambda: self._count_show(+1))\
+            .pack(side="left", padx=2)
+        ttk.Button(nav, text="Open full size", command=lambda: self.count_figs and
+                   self._open_path(self.count_figs[self.count_idx])).pack(side="left", padx=4)
+        self.count_prev_lbl = ttk.Label(nav, text="Preview appears after counting.",
+                                        foreground="#666")
+        self.count_prev_lbl.pack(side="left", padx=6)
+        self.count_canvas = tk.Label(prev, background="#222")
+        self.count_canvas.pack(fill="both", expand=True, pady=(4, 0))
+        self.count_canvas.bind("<Configure>", lambda e: self._count_show(0))
+
+        self._count_load_settings()
+        self.root.after(150, self._count_poll)
+
+    # ---- helpers ----
+    def _count_add_folder(self):
+        d = filedialog.askdirectory(title="Folder with brightfield images")
+        if d:
+            self.count_list.insert("end", os.path.normpath(d))
+
+    def _count_add_files(self):
+        fs = filedialog.askopenfilenames(
+            title="Brightfield images",
+            filetypes=[("Images", "*.tif *.tiff *.png *.jpg *.jpeg"), ("All files", "*.*")])
+        for p in fs:
+            self.count_list.insert("end", os.path.normpath(p))
+
+    def _count_outdir(self):
+        out = self.count_out_var.get().strip()
+        items = list(self.count_list.get(0, "end"))
+        if not out and items:
+            out = items[0] if os.path.isdir(items[0]) else os.path.dirname(items[0])
+        return os.path.join(out, "cell_count") if out else self.script_dir
+
+    def _count_settings(self):
+        return {"inputs": list(self.count_list.get(0, "end")),
+                "output": self.count_out_var.get().strip(),
+                "px_per_um": self.count_px_var.get().strip(),
+                "min_area": self.count_min_var.get().strip(),
+                "edge": self.count_edge_var.get(),
+                "color": self.count_color_var.get().strip(),
+                "line_width": self.count_lw_var.get().strip(),
+                "opts": {k: v.get() for k, v in self.count_opts.items()}}
+
+    def _count_load_settings(self):
+        try:
+            with open(self.COUNT_SETTINGS, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return
+        for p in d.get("inputs", []):
+            if os.path.exists(p):
+                self.count_list.insert("end", p)
+        self.count_out_var.set(d.get("output", ""))
+        self.count_px_var.set(d.get("px_per_um", self.count_px_var.get()))
+        self.count_min_var.set(d.get("min_area", "0"))
+        if d.get("edge") in [x[0] for x in self.COUNT_EDGE]:
+            self.count_edge_var.set(d["edge"])
+        self.count_color_var.set(d.get("color", "yellow"))
+        self.count_lw_var.set(d.get("line_width", "3"))
+        for k, v in (d.get("opts") or {}).items():
+            if k in self.count_opts:
+                self.count_opts[k].set(bool(v))
+
+    def _count_run(self):
+        items = list(self.count_list.get(0, "end"))
+        if not items:
+            messagebox.showinfo(APP_TITLE, "Add a folder or images first (step 1).")
+            return
+        if self.count_proc and self.count_proc.poll() is None:
+            messagebox.showinfo(APP_TITLE, "Counting is already running.")
+            return
+
+        def number(var, what):
+            t = var.get().strip().replace(",", ".")
+            if not t:
+                return 0.0
+            try:
+                v = float(t)
+                if v < 0:
+                    raise ValueError
+                return v
+            except ValueError:
+                messagebox.showerror(APP_TITLE, f"{what}: '{t}' is not a number.")
+                raise
+        try:
+            px = number(self.count_px_var, "Pixels per µm")
+            mn = number(self.count_min_var, "Smallest object")
+            lw = number(self.count_lw_var, "Line width") or 3.0
+        except ValueError:
+            return
+        try:
+            with open(self.COUNT_SETTINGS, "w", encoding="utf-8") as fh:
+                json.dump(self._count_settings(), fh, indent=2)
+        except OSError:
+            pass
+        import tempfile
+        cfg = os.path.join(tempfile.gettempdir(), "cellcount_gui_config.json")
+        with open(cfg, "w", encoding="utf-8") as fh:
+            json.dump(self._collect_config(), fh, indent=2)
+
+        edge = dict(self.COUNT_EDGE).get(self.count_edge_var.get(), "all")
+        cmd = [sys.executable, "-u", os.path.join(self.script_dir, "cell_count.py")] + items
+        cmd += ["--edge", edge, "--color", self.count_color_var.get().strip() or "yellow",
+                "--line-width", f"{lw:g}", "--config", cfg]
+        if px:
+            cmd += ["--px-per-um", f"{px:g}"]
+        if mn:
+            cmd += ["--min-area-um2", f"{mn:g}"]
+        if self.count_out_var.get().strip():
+            cmd += ["--output", self.count_out_var.get().strip()]
+        o = {k: v.get() for k, v in self.count_opts.items()}
+        if not o["count_label"]:
+            cmd.append("--no-count-label")
+        if not o["scale_bar"]:
+            cmd.append("--no-scale-bar")
+        if not o["show_uncounted"]:
+            cmd.append("--hide-uncounted")
+        for k in ("numbers", "filled", "svg"):
+            if o[k]:
+                cmd.append("--" + k)
+        if self.count_force_var.get():
+            cmd.append("--force")
+
+        self.count_log.delete("1.0", "end")
+        self.count_log.insert("end", "Counting ... the first image also loads Cellpose "
+                                     "(and downloads its model once).\n\n")
+        self.count_btn.config(state="disabled")
+        self.count_stop_btn.config(state="normal")
+        self.count_status.config(text="counting...")
+
+        def work():
+            try:
+                env = dict(os.environ, PYTHONIOENCODING="utf-8")
+                flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                self.count_proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    bufsize=1, encoding="utf-8", errors="replace",
+                    cwd=self.script_dir, creationflags=flags, env=env)
+                for line in self.count_proc.stdout:
+                    self.count_queue.put(line)
+                self.count_proc.wait()
+                self.count_queue.put(("__DONE__", self.count_proc.returncode))
+            except Exception:
+                self.count_queue.put(traceback.format_exc())
+                self.count_queue.put(("__DONE__", -1))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _count_stop(self):
+        if self.count_proc and self.count_proc.poll() is None:
+            self.count_proc.terminate()
+            self.count_log.insert("end", "\n[stopped by user]\n", "warn")
+
+    def _count_poll(self):
+        try:
+            while True:
+                item = self.count_queue.get_nowait()
+                if isinstance(item, tuple) and item and item[0] == "__DONE__":
+                    code = item[1]
+                    self.count_btn.config(state="normal")
+                    self.count_stop_btn.config(state="disabled")
+                    self.count_status.config(
+                        text="finished" if code == 0 else f"finished with problems (exit {code})")
+                    self.count_log.insert("end", "\nFinished.\n" if code == 0 else
+                                          f"\nExited with code {code}.\n",
+                                          "ok" if code == 0 else "err")
+                    self.count_log.see("end")
+                    self._count_find_figs()
+                else:
+                    s = str(item)
+                    low = s.lower()
+                    tag = ("err" if ("error" in low or "traceback" in low) else
+                           "ok" if " counted " in low else
+                           "warn" if "warning" in low else None)
+                    self.count_log.insert("end", s, tag or ())
+                    self.count_log.see("end")
+        except queue.Empty:
+            pass
+        self.root.after(150, self._count_poll)
+
+    def _count_find_figs(self):
+        d = os.path.join(self._count_outdir(), "figures")
+        try:
+            # outline figures first, filled masks after them
+            self.count_figs = sorted((os.path.join(d, n) for n in os.listdir(d)
+                                      if n.lower().endswith(".png")),
+                                     key=lambda p: (p.endswith("_mask.png"), p))
+        except OSError:
+            self.count_figs = []
+        self.count_idx = 0
+        self._count_show(0)
+
+    def _count_show(self, step):
+        if not self.count_figs:
+            return
+        self.count_idx = (self.count_idx + step) % len(self.count_figs)
+        path = self.count_figs[self.count_idx]
+        try:
+            from PIL import Image, ImageTk
+            w = max(200, self.count_canvas.winfo_width() - 4)
+            h = max(200, self.count_canvas.winfo_height() - 4)
+            with Image.open(path) as im:
+                im.thumbnail((w, h))
+                self.count_photo = ImageTk.PhotoImage(im.convert("RGB"))
+            self.count_canvas.config(image=self.count_photo)
+            self.count_prev_lbl.config(
+                text=f"{self.count_idx + 1}/{len(self.count_figs)}  {os.path.basename(path)}")
+        except Exception as exc:
+            self.count_prev_lbl.config(text=f"(no preview: {exc})")
 
     # ============================================================== setup ===
     def _build_setup_tab(self):

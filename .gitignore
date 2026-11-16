@@ -47,3 +47,6 @@ launcher_environment.txt
 .venv/
 # conda folder for unusual install places (machine-specific)
 conda_path.txt
+
+# Cell count tab: last used folders and options (machine-specific)
+cellcount_settings.json

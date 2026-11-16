@@ -34,6 +34,7 @@ the next student taking the project over.
 13. [Known limitations and open questions](#13-known-limitations-and-open-questions)
 14. [File reference](#14-file-reference)
 15. [Glossary](#15-glossary)
+16. [Cell counting from brightfield images](#16-cell-counting-from-brightfield-images)
 
 ---
 
@@ -1201,3 +1202,71 @@ replicates.
 **TTA** — test-time augmentation; averaging predictions over transformed
 copies.
 **Weight decay** — penalty pulling network weights towards zero.
+
+---
+
+## 16. Cell counting from brightfield images
+
+`cell_count.py` (GUI: **Cell count** tab) counts cells when only brightfield
+images exist; no fluorescence, no classification.
+
+**Input.** Image files and/or folders (searched two levels deep; `.tif`,
+`.tiff`, `.png`, `.jpg`). Where channels are named, only the brightfield is
+used; fluorescence, overlays and files the programs wrote are skipped. Names
+in the results are the path below the input folder, without folder names the
+file name already contains (`A1/A1_brightfield.tif` → `A1_brightfield`).
+
+**Segmentation.** The image is reduced to one 2D plane (RGB averaged, stacks
+max-projected), stretched to 8 bit between the 0.5th and 99.5th percentile,
+downscaled by *Cellpose downscale* and segmented by the release pipeline's
+own `run_cellpose`: same model (cpsam), flow / cellprob thresholds, GPU or
+CPU, and the same automatic retry at cellprob −2 when nothing is found. The
+label mask is enlarged back to the image size (nearest neighbour) and saved
+as a 16-bit TIFF. An existing mask is reused unless *segment again* is ticked.
+
+**Measurements per cell** (full-resolution pixels): area A, equivalent
+diameter d = 2√(A/π), centroid, edge contact. With a calibration *p* px/µm:
+A[µm²] = A[px] / p², d[µm] = d[px] / p. Median area and diameter are taken
+over cells that are complete (not touching the edge) and not too small.
+
+**What is counted** (*Cells at the image edge*):
+
+| rule | counted | use for |
+|---|---|---|
+| all | every object ≥ minimum area | number of cells in this field |
+| exclude | only cells entirely inside the image | per-cell measurements (no cut cells) |
+| unbiased | cells touching neither the bottom nor the left edge | cells per area |
+
+The unbiased rule is a counting frame (Gundersen 1977): a cell cut by the
+border belongs to this field or to the neighbouring one, never to both, so
+counting two adjacent edges and excluding the other two gives the expected
+count of the field area without bias. Density is therefore always
+n_unbiased / field area (mm²), whatever rule is chosen for *n_counted*.
+Objects below the minimum area (debris) are never counted.
+
+**Figures.** Outlines are traced per cell (OpenCV `findContours`) through the
+centres of its boundary pixels, so they lie just inside the cell and
+neighbouring cells stay separated; the pixel staircase is removed by a
+circular moving average over 5 boundary points and the polygon is simplified
+(Douglas–Peucker, 0.25 px). When the mask was segmented at reduced
+resolution, the outline is traced on that mask and scaled, which is smoother
+than tracing the enlarged mask. Line width is given in image pixels, so it
+looks the same at every output size.
+
+- `*_outlines.png`: 1 image pixel = 1 output pixel.
+- `*_outlines.pdf` (and `.svg`): 18 cm wide page, image embedded at up to
+  3000 px on its long side, outlines, scale bar and text as vectors (sharp at
+  any zoom, editable).
+- `*_mask.png` (optional): each cell filled in its own colour (45 % opacity).
+- Counted cells in the chosen colour; uncounted ones (edge, debris) grey and
+  dashed, or hidden. Scale bar: a round length of about 18 % of the width.
+
+**Outputs** in `<results>/cell_count/`: `cell_count_summary.csv` (per image:
+objects, at edge, too small, counted, unbiased count, coverage, median
+area/diameter, field area, density, Cellpose settings), `cells/*_cells.csv`
+(per cell), `masks/*_cp_masks.tif`, `figures/`.
+
+**Limits.** The count is only as good as the segmentation: check the outline
+figure before using a number. Clumps that Cellpose merges count as one cell;
+lower *Cellpose cellprob* (Settings) if faint cells are missed. On a laptop
+without a supported GPU Cellpose runs on the CPU (minutes per large image).
