@@ -9,6 +9,12 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 Analysis version unchanged (3.1): rule results are identical to before.
 
 ### Fixed
+- Stitching: "no BZ-X tiles found" when *Save stitched to* was the tiles
+  folder itself or a folder above it; with the tiles folder as output, the
+  tiles were also taken for finished results. Tile names with Z/T tokens,
+  other separators and JPEG/PNG tiles are now recognised, a `.gci` one
+  folder up is found, and when nothing is found the log lists what the folder
+  does contain.
 - **Cellpose on a CPU was ~10x too slow**: Cellpose 4 runs in bfloat16 by
   default, which most laptop processors only emulate (measured 3.0 s vs
   0.24 s per transformer block). On the CPU a ~1 s test now picks bfloat16

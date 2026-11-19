@@ -1325,7 +1325,11 @@ brightfield and one fluorescence image, ready for the analysis.
 **Input.** A parent folder, searched to any depth. Tiles are recognised by
 the BZ-X file names, e.g. `12_conditions_XY01_00007_CH4.tif`: prefix, position
 (`XY01`), tile number (`00001` …), channel (`CH1`–`CH4`; `Overlay` files are
-ignored). Every folder × prefix × position is one group. If the group's
+ignored). Also accepted: `-` or spaces as separators, no `XY` part, Z / T
+tokens (`_Z005`; each plane is stitched as its own position, e.g.
+`XY01_Z005`), no channel token (single channel), and `.png` / `.jpg` tiles.
+If nothing matches, the log lists the image and `.gci` files the folder does
+contain, and says when they look like BZ-X stitched images rather than tiles. Every folder × prefix × position is one group. If the group's
 `.gci` file is present (same folder, the parent folder, or one level up) it is
 read for the grid (rows × columns), the tile number → grid place table, the
 channel names / colours and the calibration. Without it the grid is

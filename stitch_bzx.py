@@ -55,8 +55,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 
-TILE_RE = re.compile(r"^(?P<prefix>.*?)_?(?P<xy>XY\d+)?_(?P<idx>\d{5})_(?P<ch>CH\d|Overlay)"
-                     r"\.tiff?$", re.IGNORECASE)
+IMG_EXT = r"\.(?:tiff?|png|jpe?g|bmp)$"
+# <prefix>_XY01_00001[_Z001][_T001]_CH2.tif  (separators _ - or space; XY optional)
+TILE_RE = re.compile(r"^(?P<prefix>.*?)[_ -]?(?P<xy>XY\d+)?[_ -](?P<idx>\d{3,6})"
+                     r"(?P<extra>(?:[_ -]?[ZT]\d+)*)[_ -]?(?P<ch>CH\d+|Overlay)" + IMG_EXT,
+                     re.IGNORECASE)
+# single-channel tiles without a channel token: <prefix>_XY01_00001.tif
+TILE1_RE = re.compile(r"^(?P<prefix>.*?)[_ -]?(?P<xy>XY\d+)?[_ -](?P<idx>\d{5})"
+                      r"(?P<extra>(?:[_ -]?[ZT]\d+)*)" + IMG_EXT, re.IGNORECASE)
 COLORS = {"red": (1, 0, 0), "green": (0, 1, 0), "blue": (0, 0, 1),
           "white": (1, 1, 1), "gray": (1, 1, 1), "grey": (1, 1, 1),
           "cyan": (0, 1, 1), "magenta": (1, 0, 1), "yellow": (1, 1, 0)}
@@ -147,32 +153,74 @@ def read_gci(path):
 
 
 # =========================================================== finding tiles ==
+def explain_no_tiles(parent):
+    """Say what IS in the folder, so a different naming can be spotted."""
+    print("ERROR: no BZ-X tiles found in")
+    print(f"   {parent}")
+    print("Expected tile names like  12 conditions_XY01_00001_CH2.tif  (prefix, XY position,")
+    print("5-digit tile number, channel CH1-CH4), as the BZ-X saves them when 'save")
+    print("individual images' is on.")
+    imgs, gcis, n_dirs = [], [], 0
+    for dirpath, _dirs, files in os.walk(parent):
+        n_dirs += 1
+        for f in files:
+            rel = os.path.relpath(os.path.join(dirpath, f), parent)
+            if re.search(IMG_EXT, f, re.IGNORECASE):
+                imgs.append(rel)
+            elif f.lower().endswith(".gci"):
+                gcis.append(rel)
+    print(f"Found instead: {len(imgs)} image file(s) and {len(gcis)} .gci file(s) "
+          f"in {n_dirs} folder(s).")
+    for r in imgs[:12]:
+        print(f"   {r}")
+    if len(imgs) > 12:
+        print(f"   ... and {len(imgs) - 12} more")
+    for r in gcis[:3]:
+        info = read_gci(os.path.join(parent, r))
+        print(f"   {r}" + (f"  (lists {len(info['tiles'])} tiles)" if info else
+                           "  (could not be read)"))
+    if not imgs:
+        print("-> This folder holds no images. Choose the folder the BZ-X saved the run into.")
+    elif all(re.fullmatch(r"\d{8,}\.tiff?", os.path.basename(r)) for r in imgs[:12]):
+        print("-> These look like images already stitched by the BZ-X software, not tiles.")
+    else:
+        print("-> If these are the tiles, send this message so the name pattern can be added.")
+
+
+
 def find_groups(parent):
     """{group key: {"dir", "name", "tiles": {channel: {index: path}}}}"""
     groups = {}
     for dirpath, _dirs, files in os.walk(parent):
+        multi = any(TILE_RE.match(f) for f in files)
         for f in files:
             m = TILE_RE.match(f)
+            if m:
+                ch = m.group("ch").upper() if m.group("ch").lower() != "overlay" else "Overlay"
+            elif not multi:
+                m = TILE1_RE.match(f)
+                ch = "CH1"
             if not m:
                 continue
-            prefix = (m.group("prefix") or "").strip(" _")
+            prefix = (m.group("prefix") or "").strip(" _-")
             xy = (m.group("xy") or "").upper()
-            key = (os.path.normcase(dirpath), prefix, xy)
+            extra = re.sub(r"[_ -]", "", m.group("extra") or "").upper()   # Z001T002
+            key = (os.path.normcase(dirpath), prefix, xy, extra)
             g = groups.setdefault(key, {"dir": dirpath, "prefix": prefix, "xy": xy,
-                                        "tiles": {}})
-            ch = m.group("ch").upper() if m.group("ch").lower() != "overlay" else "Overlay"
+                                        "extra": extra, "tiles": {}})
             g["tiles"].setdefault(ch, {})[int(m.group("idx"))] = os.path.join(dirpath, f)
     # readable unique names: XY01, or prefix_XY01 when the same XY occurs twice
     by_xy = {}
     for k, g in groups.items():
-        by_xy.setdefault(g["xy"] or g["prefix"], []).append(k)
-    for base, keys in by_xy.items():
+        by_xy.setdefault((g["xy"] or g["prefix"], g["extra"]), []).append(k)
+    for (base, extra), keys in by_xy.items():
         for k in keys:
             g = groups[k]
-            name = base or "tiles"
+            name = "_".join(p for p in (base, extra) if p) or "tiles"
             if len(keys) > 1:
                 rel = os.path.relpath(g["dir"], parent).replace("\\", "/").strip("./")
-                name = "_".join(p for p in (rel.replace("/", "_"), g["prefix"], g["xy"]) if p)
+                name = "_".join(p for p in (rel.replace("/", "_"), g["prefix"], g["xy"],
+                                            extra) if p)
             g["name"] = re.sub(r'[<>:"/\\|?*]', "-", name) or "tiles"
     return groups
 
@@ -181,9 +229,10 @@ def find_gci(g):
     """The group file of a tile group: <prefix>_<XY>.gci, else any .gci in the
     folder whose file list names these tiles."""
     cands = []
-    if g["xy"]:
-        cands += glob.glob(os.path.join(glob.escape(g["dir"]), f"*{g['xy']}*.gci"))
-    cands += glob.glob(os.path.join(glob.escape(g["dir"]), "*.gci"))
+    for d in (g["dir"], os.path.dirname(g["dir"])):      # tile folder, then one up
+        if g["xy"]:
+            cands += glob.glob(os.path.join(glob.escape(d), f"*{g['xy']}*.gci"))
+        cands += glob.glob(os.path.join(glob.escape(d), "*.gci"))
     seen = set()
     for p in cands:
         if p in seen:
@@ -203,8 +252,13 @@ def find_gci(g):
 def load_tile(path):
     """Tile as float32 2D plus its colour: BZ-X tiles are RGB with the signal in
     the pseudo-colour channel(s); grey = all three equal."""
-    import tifffile
-    a = tifffile.imread(path)
+    if path.lower().endswith((".tif", ".tiff")):
+        import tifffile
+        a = tifffile.imread(path)
+    else:
+        from PIL import Image
+        with Image.open(path) as im:
+            a = np.asarray(im.convert("RGB") if im.mode not in ("L", "I;16", "I") else im)
     color = (1, 1, 1)
     if a.ndim == 3 and a.shape[-1] in (3, 4):
         a = a[..., :3]
@@ -584,14 +638,22 @@ def main(argv=None):
     os.makedirs(opt.output, exist_ok=True)
 
     groups = find_groups(parent)
-    groups = {k: g for k, g in groups.items()
-              if not os.path.normcase(g["dir"]).startswith(os.path.normcase(opt.output))}
+    # tiles inside an earlier output folder that lies INSIDE the tiles folder are
+    # not input (stitched files never match the tile pattern anyway)
+    outn, parn = os.path.normcase(opt.output), os.path.normcase(parent)
+    if outn != parn and outn.startswith(parn + os.sep):
+        groups = {k: g for k, g in groups.items()
+                  if not (os.path.normcase(g["dir"]) + os.sep).startswith(outn + os.sep)}
     if not groups:
-        raise SystemExit("ERROR: no BZ-X tiles found (names like ..._XY01_00001_CH2.tif).")
+        explain_no_tiles(parent)
+        raise SystemExit(1)
     todo = sorted(groups.values(), key=lambda g: g["name"])
     if not opt.force:
-        done = [g for g in todo if glob.glob(os.path.join(glob.escape(opt.output),
-                                                          glob.escape(g["name"]), "*_*.tif"))]
+        done = [g for g in todo if glob.glob(os.path.join(
+            glob.escape(opt.output), glob.escape(g["name"]),
+            glob.escape(g["name"]) + "_brightfield.tif")) or glob.glob(os.path.join(
+            glob.escape(opt.output), glob.escape(g["name"]),
+            glob.escape(g["name"]) + "_fluorescence*.tif"))]
         if done:
             print(f"{len(done)} position(s) already stitched - kept (use --force to redo)")
         todo = [g for g in todo if g not in done]
