@@ -158,8 +158,8 @@ def explain_no_tiles(parent):
     print("ERROR: no BZ-X tiles found in")
     print(f"   {parent}")
     print("Expected tile names like  12 conditions_XY01_00001_CH2.tif  (prefix, XY position,")
-    print("5-digit tile number, channel CH1-CH4), as the BZ-X saves them when 'save")
-    print("individual images' is on.")
+    print("5-digit tile number, channel CH1-CH4): the single tiles the BZ-X saves next")
+    print("to the .gci file of a multi-point / image-joint capture.")
     imgs, gcis, n_dirs = [], [], 0
     for dirpath, _dirs, files in os.walk(parent):
         n_dirs += 1
