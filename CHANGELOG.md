@@ -4,7 +4,7 @@ All notable changes, newest first. "Analysis version" changes alter the numbers
 a run produces; results from different analysis versions are not comparable.
 Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 
-## [Unreleased] — 2026-11-14
+## [Unreleased] — 2026-11-19
 
 Analysis version unchanged (3.1): rule results are identical to before.
 
@@ -17,6 +17,17 @@ Analysis version unchanged (3.1): rule results are identical to before.
   more exact format).
 
 ### Added
+- **Stitching** (tab + `stitch_bzx.py`): joins the tiles of a Keyence BZ-X
+  (e.g. 4 x 4 per position) into one brightfield and one fluorescence image
+  per position, for every position under a parent folder. Tile positions are
+  measured from the brightfield (phase correlation, global least squares),
+  overlaps feather-blended without seams; reads the `.gci` file for grid,
+  channels and calibration. Positions with fewer than 4 tiles or missing
+  tiles are skipped and flagged (`stitch_report.csv`). Brightfield vignetting
+  corrected by default, fluorescence left as recorded. Output folder can be
+  sent straight to the Run tab.
+- Cell count: the **calibration is read from the image file** when present
+  (stitched images); the entry is used otherwise.
 - Cell count: **cell numbers** (counted cells 1..n in reading order, same on
   the figure and in the table) and positions in µm; **Excel workbook**
   `cell_count.xlsx` (summary, per-sample sheet with bar charts, one sheet per

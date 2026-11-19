@@ -185,16 +185,19 @@ class CargoGUI:
     # ---------------------------------------------------------------- UI ---
     def _build_ui(self):
         nb = ttk.Notebook(self.root)
+        self.nb = nb
         nb.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.tab_run = ttk.Frame(nb)
         self.tab_count = ttk.Frame(nb)
+        self.tab_stitch = ttk.Frame(nb)
         self.tab_settings = ttk.Frame(nb)
         self.tab_labels = ttk.Frame(nb)
         self.tab_plot = ttk.Frame(nb)
         self.tab_cnn = ttk.Frame(nb)
         self.tab_setup = ttk.Frame(nb)
         nb.add(self.tab_run, text="  Run  ")
+        nb.add(self.tab_stitch, text="  Stitching  ")
         nb.add(self.tab_count, text="  Cell count  ")
         nb.add(self.tab_labels, text="  Sample names  ")
         nb.add(self.tab_settings, text="  Settings  ")
@@ -203,6 +206,7 @@ class CargoGUI:
         nb.add(self.tab_setup, text="  Setup check  ")
 
         self._build_run_tab()
+        self._build_stitch_tab()
         self._build_count_tab()
         self._build_settings_tab()
         self._build_labels_tab()
@@ -1934,6 +1938,276 @@ class CargoGUI:
                 text=f"{self.count_idx + 1}/{len(self.count_figs)}  {os.path.basename(path)}")
         except Exception as exc:
             self.count_prev_lbl.config(text=f"(no preview: {exc})")
+
+    # ========================================================== stitching ===
+    STITCH_SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "stitch_settings.json")
+
+    def _build_stitch_tab(self):
+        f = self.tab_stitch
+        self.st_queue = queue.Queue()
+        self.st_proc = None
+        self.st_figs, self.st_idx, self.st_photo = [], 0, None
+
+        ttk.Label(f, justify="left", wraplength=820, foreground="#444",
+                  text="Stitches the tiles of a Keyence BZ-X (e.g. 4 x 4 per position) "
+                       "into one image per position: brightfield and fluorescence, "
+                       "aligned from the image content and blended without seams. "
+                       "The result is ready for the analysis (Run tab). Positions with "
+                       "too few tiles are skipped and listed at the end.")\
+            .pack(anchor="w", padx=8, pady=(8, 2))
+
+        b1 = ttk.LabelFrame(f, text="1. Folders")
+        b1.pack(fill="x", padx=8, pady=4)
+        for label, var_name, title in (
+                ("Tiles (parent folder):", "st_in_var", "Folder with the BZ-X tiles"),
+                ("Save stitched to:", "st_out_var", "Folder for the stitched images")):
+            r = ttk.Frame(b1)
+            r.pack(fill="x", padx=6, pady=3)
+            ttk.Label(r, text=label, width=20).pack(side="left")
+            v = tk.StringVar()
+            setattr(self, var_name, v)
+            ttk.Entry(r, textvariable=v).pack(side="left", fill="x", expand=True, padx=4)
+            ttk.Button(r, text="Browse...", command=lambda v=v, t=title:
+                       self._cnn_pick_dir(v, t)).pack(side="left")
+        ttk.Label(b1, foreground="#666", font=("Segoe UI", 8),
+                  text="Subfolders are searched (XY01, XY02, ...). Empty 'Save stitched "
+                       "to' = <tiles folder>_stitched.").pack(anchor="w", padx=8, pady=(0, 4))
+
+        b2 = ttk.LabelFrame(f, text="2. Options")
+        b2.pack(fill="x", padx=8, pady=4)
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=4)
+        ttk.Label(r, text="Skip positions with fewer than").pack(side="left")
+        self.st_min_var = tk.StringVar(value="4")
+        ttk.Spinbox(r, from_=2, to=100, textvariable=self.st_min_var, width=4)\
+            .pack(side="left", padx=4)
+        ttk.Label(r, text="tiles").pack(side="left")
+        ttk.Label(r, text="Tile overlap:").pack(side="left", padx=(18, 4))
+        self.st_ov_var = tk.StringVar(value="30")
+        e = ttk.Spinbox(r, from_=5, to=60, textvariable=self.st_ov_var, width=4)
+        e.pack(side="left")
+        ttk.Label(r, text="%  (BZ-X default 30)").pack(side="left", padx=4)
+        ToolTip(e, "Only a starting point: the real positions are measured from the\n"
+                   "image content within +-12 % of a tile around it.")
+        r = ttk.Frame(b2)
+        r.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Label(r, text="Correct vignetting:").pack(side="left")
+        self.st_ffbf_var = tk.BooleanVar(value=True)
+        cb = ttk.Checkbutton(r, text="brightfield", variable=self.st_ffbf_var)
+        cb.pack(side="left", padx=(4, 0))
+        ToolTip(cb, "Evens the background of the brightfield (darker tile edges).\n"
+                    "The brightfield is only used to find the cells, so this cannot\n"
+                    "change any measured value - recommended.")
+        self.st_ff_var = tk.BooleanVar(value=False)
+        cb = ttk.Checkbutton(r, text="fluorescence", variable=self.st_ff_var)
+        cb.pack(side="left", padx=(4, 0))
+        ToolTip(cb, "Removes the grid pattern of darker tile edges in the fluorescence.\n"
+                    "Changes intensities near tile edges by up to ~25 %: leave it OFF\n"
+                    "to compare with images stitched by the BZ-X software or with\n"
+                    "brightness thresholds fitted on them.")
+        self.st_overlay_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(r, text="also a colour overlay", variable=self.st_overlay_var)\
+            .pack(side="left", padx=14)
+        self.st_force_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(r, text="redo positions already stitched",
+                        variable=self.st_force_var).pack(side="left")
+
+        r = ttk.Frame(f)
+        r.pack(fill="x", padx=8, pady=4)
+        self.st_btn = ttk.Button(r, text="Stitch", command=self._st_run)
+        self.st_btn.pack(side="left")
+        self.st_stop_btn = ttk.Button(r, text="Stop", state="disabled", command=self._st_stop)
+        self.st_stop_btn.pack(side="left", padx=4)
+        ttk.Button(r, text="Open stitched folder",
+                   command=lambda: self._open_path(self._st_outdir())).pack(side="left")
+        self.st_use_btn = ttk.Button(r, text="Analyse these on the Run tab  >",
+                                     command=self._st_use)
+        self.st_use_btn.pack(side="left", padx=6)
+        self.st_status = ttk.Label(r, text="", foreground="#666")
+        self.st_status.pack(side="right")
+
+        pw = ttk.PanedWindow(f, orient="horizontal")
+        pw.pack(fill="both", expand=True, padx=8, pady=(2, 8))
+        self.st_log = scrolledtext.ScrolledText(pw, height=10, width=60, wrap="word",
+                                                font=("Consolas", 9))
+        for t, c in (("err", "#c00000"), ("ok", "#008000"), ("warn", "#b06000")):
+            self.st_log.tag_config(t, foreground=c)
+        pw.add(self.st_log, weight=1)
+        prev = ttk.Frame(pw)
+        pw.add(prev, weight=1)
+        nav = ttk.Frame(prev)
+        nav.pack(fill="x")
+        ttk.Button(nav, text="<", width=3, command=lambda: self._st_show(-1)).pack(side="left")
+        ttk.Button(nav, text=">", width=3, command=lambda: self._st_show(+1))\
+            .pack(side="left", padx=2)
+        ttk.Button(nav, text="Open full size", command=lambda: self.st_figs and
+                   self._open_path(self.st_figs[self.st_idx])).pack(side="left", padx=4)
+        self.st_prev_lbl = ttk.Label(nav, text="Preview appears after stitching.",
+                                     foreground="#666")
+        self.st_prev_lbl.pack(side="left", padx=6)
+        self.st_canvas = tk.Label(prev, background="#222")
+        self.st_canvas.pack(fill="both", expand=True, pady=(4, 0))
+        self.st_canvas.bind("<Configure>", lambda e: self._st_show(0))
+
+        try:
+            with open(self.STITCH_SETTINGS, encoding="utf-8") as fh:
+                d = json.load(fh)
+            self.st_in_var.set(d.get("input", ""))
+            self.st_out_var.set(d.get("output", ""))
+            self.st_min_var.set(d.get("min_tiles", "4"))
+            self.st_ov_var.set(d.get("overlap", "30"))
+            self.st_ff_var.set(bool(d.get("flat_field", False)))
+            self.st_ffbf_var.set(bool(d.get("flat_field_bf", True)))
+            self.st_overlay_var.set(bool(d.get("overlay", False)))
+        except (OSError, ValueError):
+            pass
+        self.root.after(150, self._st_poll)
+
+    def _st_outdir(self):
+        out = self.st_out_var.get().strip()
+        src = self.st_in_var.get().strip().rstrip("\\/")
+        return out or (src + "_stitched" if src else self.script_dir)
+
+    def _st_run(self):
+        src = self.st_in_var.get().strip()
+        if not os.path.isdir(src):
+            messagebox.showinfo(APP_TITLE, "Choose the folder with the BZ-X tiles first.")
+            return
+        if self.st_proc and self.st_proc.poll() is None:
+            messagebox.showinfo(APP_TITLE, "Stitching is already running.")
+            return
+        try:
+            mn = int(float(self.st_min_var.get()))
+            ov = float(self.st_ov_var.get().replace(",", "."))
+        except ValueError:
+            messagebox.showerror(APP_TITLE, "Minimum tiles and overlap must be numbers.")
+            return
+        try:
+            with open(self.STITCH_SETTINGS, "w", encoding="utf-8") as fh:
+                json.dump({"input": src, "output": self.st_out_var.get().strip(),
+                           "min_tiles": str(mn), "overlap": f"{ov:g}",
+                           "flat_field": self.st_ff_var.get(),
+                           "flat_field_bf": self.st_ffbf_var.get(),
+                           "overlay": self.st_overlay_var.get()}, fh, indent=2)
+        except OSError:
+            pass
+        cmd = [sys.executable, "-u", os.path.join(self.script_dir, "stitch_bzx.py"), src,
+               "--output", self._st_outdir(), "--min-tiles", str(mn), "--overlap", f"{ov:g}"]
+        if self.st_ff_var.get():
+            cmd.append("--flat-field")
+        if not self.st_ffbf_var.get():
+            cmd.append("--no-flat-field-bf")
+        if self.st_overlay_var.get():
+            cmd.append("--overlay")
+        if self.st_force_var.get():
+            cmd.append("--force")
+        self.st_log.delete("1.0", "end")
+        self.st_btn.config(state="disabled")
+        self.st_stop_btn.config(state="normal")
+        self.st_status.config(text="stitching...")
+
+        def work():
+            try:
+                env = dict(os.environ, PYTHONIOENCODING="utf-8")
+                flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                self.st_proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    bufsize=1, encoding="utf-8", errors="replace",
+                    cwd=self.script_dir, creationflags=flags, env=env)
+                for line in self.st_proc.stdout:
+                    self.st_queue.put(line)
+                self.st_proc.wait()
+                self.st_queue.put(("__DONE__", self.st_proc.returncode))
+            except Exception:
+                self.st_queue.put(traceback.format_exc())
+                self.st_queue.put(("__DONE__", -1))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _st_stop(self):
+        if self.st_proc and self.st_proc.poll() is None:
+            self.st_proc.terminate()
+            self.st_log.insert("end", "\n[stopped by user]\n", "warn")
+
+    def _st_poll(self):
+        try:
+            while True:
+                item = self.st_queue.get_nowait()
+                if isinstance(item, tuple) and item and item[0] == "__DONE__":
+                    code = item[1]
+                    self.st_btn.config(state="normal")
+                    self.st_stop_btn.config(state="disabled")
+                    self.st_status.config(text="finished" if code == 0 else f"exit {code}")
+                    self.st_log.insert("end", "\nFinished.\n" if code == 0 else
+                                       f"\nExited with code {code}.\n",
+                                       "ok" if code == 0 else "err")
+                    self.st_log.see("end")
+                    self._st_find_figs()
+                else:
+                    s = str(item)
+                    low = s.lower()
+                    tag = ("err" if ("error" in low or "traceback" in low or ": failed" in low) else
+                           "warn" if ("skipped" in low or "flagged" in low or "note:" in low
+                                      or "check the seams" in low) else
+                           "ok" if ": ok " in low else None)
+                    self.st_log.insert("end", s, tag or ())
+                    self.st_log.see("end")
+        except queue.Empty:
+            pass
+        self.root.after(150, self._st_poll)
+
+    def _st_find_figs(self):
+        out = self._st_outdir()
+        figs = []
+        try:
+            for d in sorted(os.listdir(out)):
+                p = os.path.join(out, d)
+                if os.path.isdir(p):
+                    figs += sorted(os.path.join(p, n) for n in os.listdir(p)
+                                   if n.lower().endswith(".tif"))
+        except OSError:
+            pass
+        self.st_figs, self.st_idx = figs, 0
+        self._st_show(0)
+
+    def _st_show(self, step):
+        if not self.st_figs:
+            return
+        self.st_idx = (self.st_idx + step) % len(self.st_figs)
+        path = self.st_figs[self.st_idx]
+        try:
+            from PIL import Image, ImageTk
+            import numpy as _np
+            w = max(200, self.st_canvas.winfo_width() - 4)
+            h = max(200, self.st_canvas.winfo_height() - 4)
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((w, h))
+                a = _np.asarray(im).astype(_np.float32)
+                top = float(_np.percentile(a, 99.8)) or 1.0
+                if float(_np.median(a)) < 40 and top < 200:
+                    # dim fluorescence: stretch for viewing only (file unchanged)
+                    a = _np.clip(a * (255.0 / top), 0, 255)
+                im = Image.fromarray(a.astype(_np.uint8))
+                self.st_photo = ImageTk.PhotoImage(im)
+            self.st_canvas.config(image=self.st_photo)
+            self.st_prev_lbl.config(text=f"{self.st_idx + 1}/{len(self.st_figs)}  "
+                                         f"{os.path.basename(path)}  (display stretched)")
+        except Exception as exc:
+            self.st_prev_lbl.config(text=f"(no preview: {exc})")
+
+    def _st_use(self):
+        out = self._st_outdir()
+        if not os.path.isdir(out):
+            messagebox.showinfo(APP_TITLE, "Stitch first - the stitched folder does not exist yet.")
+            return
+        self.parent_var.set(out)
+        try:
+            self._scan_samples()
+        except Exception:
+            pass
+        self.nb.select(self.tab_run)
 
     # ============================================================== setup ===
     def _build_setup_tab(self):

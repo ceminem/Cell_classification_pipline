@@ -50,3 +50,6 @@ conda_path.txt
 
 # Cell count tab: last used folders and options (machine-specific)
 cellcount_settings.json
+
+# Stitching tab: last used folders and options (machine-specific)
+stitch_settings.json

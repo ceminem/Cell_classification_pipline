@@ -89,12 +89,39 @@ samples → *Run analysis*.
 
 ---
 
+## Part 3a — Stitching BZ-X tiles (Stitching tab)
+
+Instead of the BZ-X analyser's image joining:
+
+1. **Stitching** tab → *Tiles (parent folder)*: the folder the BZ-X saved
+   (with XY01, XY02, … inside, or all tiles in one folder). Keep the `.gci`
+   files with the tiles: they hold the grid and the calibration (without them
+   a 4 × 4 snake grid is assumed from the tile numbers).
+2. Leave *Skip positions with fewer than 4 tiles* and *Tile overlap 30 %*
+   unless you changed the overlap in the BZ-X software.
+3. *Correct vignetting*: **brightfield on** (only evens the background for
+   Cellpose), **fluorescence off** (keeps the intensities as the BZ-X would;
+   the thresholds were made on such images).
+4. *Stitch*. Each position takes a few seconds; green = stitched, orange =
+   skipped. Skipped positions (too few or missing tiles) are listed again at
+   the end under **FLAGGED** and in `stitch_report.csv`.
+5. Look through the preview (◀ ▶); the fluorescence is brightened for display
+   only.
+6. *Analyse these on the Run tab >* puts the stitched folder
+   (`<tiles folder>_stitched`) on the Run tab and lists the positions as
+   samples. The *Cell count* tab reads the calibration from these files.
+
+---
+
 ## Part 3b — Counting cells in brightfield images (Cell count tab)
 
 For images that have only brightfield (no fluorescence):
 
 1. **Cell count** tab → *Add folder…* (or *Add images…*).
-2. *Pixels per µm*: `2.6428` for the 20x objective (change for others).
+2. *Pixels per µm*: `2.6428` for the 20x objective without binning,
+   `1.3247` for BZ-X images with 2 × 2 binning (the usual stitched images).
+   Images from the *Stitching* tab carry their calibration; it is used
+   automatically.
 3. *Speed*: on a laptop without GPU choose **Fastest: 1/4 size** (minutes
    instead of most of an hour per image); check the outlines once.
 4. *Cells at the image edge*: *Count every cell* for the number in the

@@ -35,6 +35,7 @@ the next student taking the project over.
 14. [File reference](#14-file-reference)
 15. [Glossary](#15-glossary)
 16. [Cell counting from brightfield images](#16-cell-counting-from-brightfield-images)
+17. [Stitching BZ-X tiles](#17-stitching-bz-x-tiles)
 
 ---
 
@@ -1151,7 +1152,9 @@ unusable. Data stays on the lab drive; the run record links data and code.
 | file | role |
 |---|---|
 | `Cargo Analysis.bat` | Windows launcher: finds conda, picks the best (GPU) environment, starts the GUI |
-| `cargo_gui.py` | the window: Run, Sample names, Settings, Figures, CNN, Setup check (incl. update button) |
+| `cargo_gui.py` | the window: Run, Stitching, Cell count, Sample names, Settings, Figures, CNN, Setup check (incl. update button) |
+| `stitch_bzx.py` | stitches BZ-X tiles per position (registration, blending, `.gci` reader); CLI |
+| `cell_count.py` | brightfield-only cell counting, figures, Excel; CLI |
 | `run_cargo_pipeline.py` | orchestrator: channel search, brightfield prep, Cellpose, measurement, batch summary, run record; CLI |
 | `cargo_measure.py` | per-cell measurement, classification rule, Otsu, CSV and overlay writing |
 | `cargo_plot.py` | figures and statistics |
@@ -1230,6 +1233,13 @@ diameter d = 2√(A/π), centroid, edge contact. With a calibration *p* px/µm:
 A[µm²] = A[px] / p², d[µm] = d[px] / p. Median area and diameter are taken
 over cells that are complete (not touching the edge) and not too small.
 
+**Calibration** comes from the image file when it carries one (TIFF
+resolution in pixels per cm or µm, as written by `stitch_bzx.py`); only
+otherwise the *Pixels per µm* entry is used. The log says when the file
+overrides the entry. BZ-X stitched files carry only "72 dpi" and are not
+trusted: for those the entry counts (**1.3247** px/µm for 20x with 2 × 2
+binning, the BZ-X default; 2.6428 without binning).
+
 **What is counted** (*Cells at the image edge*):
 
 | rule | counted | use for |
@@ -1303,3 +1313,118 @@ segmenting, a line every 30 s shows the run is alive.
 figure before using a number. Clumps that Cellpose merges count as one cell;
 lower *Cellpose cellprob* (Settings) if faint cells are missed. On a laptop
 without a supported GPU Cellpose runs on the CPU (minutes per large image).
+
+---
+
+## 17. Stitching BZ-X tiles
+
+`stitch_bzx.py` (GUI: **Stitching** tab) replaces the image joining of the
+Keyence BZ-X analyser: it turns the tiles of every position into one
+brightfield and one fluorescence image, ready for the analysis.
+
+**Input.** A parent folder, searched to any depth. Tiles are recognised by
+the BZ-X file names, e.g. `12_conditions_XY01_00007_CH4.tif`: prefix, position
+(`XY01`), tile number (`00001` …), channel (`CH1`–`CH4`; `Overlay` files are
+ignored). Every folder × prefix × position is one group. If the group's
+`.gci` file is present (same folder, the parent folder, or one level up) it is
+read for the grid (rows × columns), the tile number → grid place table, the
+channel names / colours and the calibration. Without it the grid is
+inferred from the highest tile number (16 → 4 × 4, 12 → 3 × 4 …) in the BZ-X
+snake order (row 1 left → right, row 2 right → left, …).
+
+The `.gci` is a ZIP of XML files; numbers are stored as the bit patterns of
+doubles, the file list is binary .NET (count, then per tile: channel name,
+row, column, file name). Example (`12_conditions_XY01.gci`): 4 × 4 tiles of
+960 × 720 px (2 × 2 binning), 754.88 nm/px = **1.3247 px/µm**, PlanFluor
+20x, CH2 = GFP (green), CH4 = Relief contrast (brightfield).
+
+**Channel roles.** A channel whose observation method is brightfield,
+relief, phase or DIC (or, without `.gci`, whose tiles are grey with no
+dominant colour) is *brightfield*; every other channel is *fluorescence*.
+
+**Skipping.** A position is not stitched, and is listed under *FLAGGED* at
+the end and in `stitch_report.csv`, when it has fewer tiles than *minimum
+tiles* (default 4) or when tiles of the grid are missing (a gap cannot be
+filled honestly). A channel that is incomplete while another is complete is
+reported as a note.
+
+### 17.1 Registration (where each tile really lies)
+
+The stage does not move by exactly the nominal step, so positions are
+measured from the image content, on the brightfield (strong texture
+everywhere; fluorescence can be empty) and then used for every channel, so
+the channels stay pixel-aligned.
+
+1. **Pairs.** For every neighbour pair (right and below), the strips that
+   should overlap (nominal overlap, default 30 %, plus the search margin)
+   are cut out.
+2. **High-pass + window.** Each strip minus its Gaussian blur (σ = 8 px)
+   removes illumination, then a Hann window suppresses the edges.
+3. **Phase correlation.** The normalised cross-power spectrum
+   $R = F_1 \overline{F_2} / |F_1 \overline{F_2}|$, back-transformed, has its
+   peak at the shift between the strips. The peak is searched only within
+   ±12 % of a tile (*search*) around the nominal offset, and refined to
+   sub-pixel precision by a parabola through the peak and its neighbours.
+4. **Confidence.** The normalised cross-correlation $r$ of the two
+   overlapping regions at the found shift. Pairs with $r <$ 0.15 (empty
+   background, focus problems) are not trusted.
+5. **Global solution.** All pair shifts give an over-determined linear system
+   $p_j - p_i = d_{ij}$ for the tile positions $p$, solved by weighted least
+   squares (weight $r$), with weak nominal constraints (weight 0.02) so that
+   tiles with no reliable neighbour keep the nominal step. Pairs that
+   disagree with the solution by more than 6 px are dropped and the system
+   is solved again (outlier removal). This keeps the mosaic consistent: no
+   error accumulates along a row.
+
+### 17.2 Blending
+
+Each tile gets a weight that rises linearly from 0 at its edge to 1 over the
+overlap width (*feathering*); every output pixel is the weighted mean of the
+tiles covering it. Exactly like the BZ-X, this hides seams; it does not
+change intensities where only one tile contributes. The mosaic is then
+trimmed to the rectangle covered completely (no black corners; `--no-trim`
+keeps everything).
+
+**Vignetting.** Tiles are darker at their edges. For the **brightfield** this
+is corrected by default: the illumination profile is the median of all
+smoothed tiles (σ = 25 px), normalised to its 99th percentile, and each tile
+is divided by it. The brightfield only serves segmentation, so this cannot
+change a measured value; it removes the grid pattern that could otherwise
+confuse Cellpose. For **fluorescence** it is OFF by default (intensities
+stay as recorded, as in images stitched by the BZ-X software, so the
+classification thresholds remain valid); `--flat-field` / the tick box turns
+it on (changes intensities near tile edges by up to ~25 %).
+
+### 17.3 Output
+
+`<output>/<position>/<position>_brightfield.tif` and
+`<position>_fluorescence.tif` (with several fluorescence channels
+`<position>_fluorescence_CH2_GFP.tif` …), RGB 8 bit like the BZ-X files:
+brightfield grey, fluorescence in its channel colour. The calibration is
+written into the TIFF (pixels per cm, from the `.gci`), so `cell_count.py`
+reads it by itself. Default output folder: `<parent>_stitched`; use it as
+the parent folder on the Run tab (the button *Analyse these on the Run tab*
+does that). Already stitched positions are skipped unless *redo* / `--force`.
+`stitch_report.csv`: one row per position with status, grid, size, matched
+overlaps, median $r$, time and notes. Positions run in parallel (CPU only,
+no graphics card needed; 3–8 s per 4 × 4 position).
+
+### 17.4 Validation
+
+Tiles were cut from a BZ-X stitched image with a known 30 % overlap, shifted
+randomly by up to ±4 px, and darkened at the edges (25 % vignetting).
+Recovered tile positions: **0 px error**, with the `.gci` and with the
+inferred grid. The junctions are invisible in the blended image, cells
+across seams are sharp; with vignetting correction the background is even
+(0.91–1.03 of the true value) and cells keep their brightness (1.02).
+Positions with 3 tiles and with one missing tile were skipped and flagged.
+Real BZ-X raw tiles should still be checked once against the BZ-X result:
+the log line `22/24 overlaps matched (median r 0.63)` tells how many pair
+shifts were trusted; a low number means the nominal step was used there.
+
+**Command line.**
+```
+python stitch_bzx.py "D:\data\BZX_run" --min-tiles 4 --overlap 30
+    [--output DIR] [--flat-field] [--no-flat-field-bf] [--overlay]
+    [--search 12] [--min-ncc 0.15] [--nm-per-px 754.88] [--workers N] [--force]
+```

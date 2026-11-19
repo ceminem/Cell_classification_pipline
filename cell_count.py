@@ -187,6 +187,37 @@ def load_gray(path):
     return arr
 
 
+def file_px_per_um(path):
+    """Calibration stored in the image file, in px per um, or 0.
+
+    Accepts TIFF resolution in pixels per centimetre (written by stitch_bzx.py,
+    Fiji, most microscope software) or ImageJ metadata with unit micron. The
+    72-dpi default that many programs (also BZ-X) write is not a calibration
+    and is ignored."""
+    if not path.lower().endswith((".tif", ".tiff")):
+        return 0.0
+    try:
+        import tifffile
+        with tifffile.TiffFile(path) as tf:
+            p = tf.pages[0]
+            xr = p.tags.get("XResolution")
+            unit = p.tags.get("ResolutionUnit")
+            ij = tf.imagej_metadata or {}
+        if not xr:
+            return 0.0
+        num, den = xr.value if isinstance(xr.value, tuple) else (xr.value, 1)
+        v = float(num) / float(den or 1)
+        if str(ij.get("unit", "")).lower() in ("micron", "um", "\u00b5m", "microns"):
+            px = v
+        elif unit is not None and int(unit.value) == 3:          # centimetre
+            px = v / 1e4
+        else:
+            return 0.0
+        return px if 0.05 <= px <= 50 else 0.0
+    except Exception:
+        return 0.0
+
+
 def to_8bit(arr, lo_pct=0.5, hi_pct=99.5):
     lo, hi = np.percentile(arr, [lo_pct, hi_pct])
     if hi <= lo:
@@ -716,6 +747,7 @@ def main(argv=None):
     print()
 
     holder = {"model": None}
+    given_px = opt.px_per_um
     summary, failed = [], []
     all_cells = {}
     several_roots = len({os.path.normcase(r) for _, r in images}) > 1
@@ -729,6 +761,12 @@ def main(argv=None):
         names_used.add(name)
         print(f"[{i}/{len(images)}] {name}")
         try:
+            # a calibration stored in the file (e.g. by the stitcher) wins
+            fpx = file_px_per_um(path)
+            opt.px_per_um = fpx or given_px
+            if fpx and abs(fpx - (given_px or 0)) > 1e-3:
+                print(f"    calibration from the file: {fpx:.4g} px/um"
+                      + (f" (instead of {given_px:g})" if given_px else ""))
             raw = load_gray(path)
             gray8 = to_8bit(raw)
             H, W = gray8.shape
@@ -824,13 +862,14 @@ def main(argv=None):
         charts = []
         if len(summary) > 1:
             try:
-                charts = bar_charts(groups, dirs["figures"], bool(opt.px_per_um))
+                charts = bar_charts(groups, dirs["figures"],
+                                    any(r["px_per_um"] for r in summary))
             except Exception as exc:
                 print(f"WARNING: bar chart failed: {exc}")
         xl = None
         try:
             xl = write_excel(os.path.join(out, "cell_count.xlsx"), summary, groups,
-                             all_cells, bool(opt.px_per_um))
+                             all_cells, any(r["px_per_um"] for r in summary))
         except Exception as exc:
             print(f"WARNING: Excel file not written: {exc}")
         print(f"Summary : {sp}")

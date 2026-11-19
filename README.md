@@ -14,6 +14,9 @@ released → per-well percentages → figures with honest statistics.**
 * **Cell count** for brightfield-only images: Cellpose segmentation, counts
   (incl. an unbiased counting frame for cells per mm²) and paper figures with
   vector cell outlines (`cell_count.py`, *Cell count* tab).
+* **Stitching** of Keyence BZ-X tiles (e.g. 4 x 4 per position) into one
+  brightfield and one fluorescence image per position, seamless, with
+  incomplete positions skipped and flagged (`stitch_bzx.py`, *Stitching* tab).
 * Every run writes a record of settings, inputs, environment and the **git
   commit**, so each number can be traced to the code that produced it.
 
@@ -29,6 +32,7 @@ Command line:
 python run_cargo_pipeline.py "D:\data\pre_glucose" --samples all
 python -m cargo_cnn.train   --data "D:\data\Slide I"
 python -m cargo_cnn.predict --model models\cnn_<date>\model.pt --parent "D:\data\pre_glucose"
+python stitch_bzx.py "D:\data\BZX_run" --min-tiles 4
 python cell_count.py "D:\data\counting" --px-per-um 2.6428 --edge unbiased
 ```
 
