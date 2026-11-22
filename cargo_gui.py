@@ -301,6 +301,8 @@ class CargoGUI:
         self.status.pack(side="left")
         ttk.Button(bottom, text="Open results folder",
                    command=self._open_results).pack(side="right")
+        ttk.Button(bottom, text="Show classified images",
+                   command=self._show_overlays).pack(side="right", padx=6)
 
     def _build_settings_tab(self):
         f = self.tab_settings
@@ -2458,7 +2460,101 @@ class CargoGUI:
         self.log.insert("end", text, tag or ())
         self.log.see("end")
 
+    def _overlay_files(self):
+        """All classified overlays (rule and CNN) below the data folder and the
+        'Save results to' folder: <sample>/edited_results/... or
+        <output>/<name>_analysis/<sample>/..."""
+        roots = [getattr(self, "last_parent", None), self.parent_var.get().strip(),
+                 self.output_var.get().strip()]
+        found, seen = [], set()
+        for root in roots:
+            if not root or not os.path.isdir(root):
+                continue
+            base_depth = root.rstrip("\\/").count(os.sep)
+            for dp, dirs, files in os.walk(root):
+                if dp.count(os.sep) - base_depth >= 4:
+                    dirs[:] = []
+                for fn in files:
+                    if fn.endswith(("_classified_overlay.png", "_cnn_overlay.png")):
+                        fp = os.path.normcase(os.path.abspath(os.path.join(dp, fn)))
+                        if fp not in seen:
+                            seen.add(fp)
+                            found.append(os.path.join(dp, fn))
+        return sorted(found, key=lambda p: (os.path.basename(p).lower(), p))
+
+    def _show_overlays(self):
+        files = self._overlay_files()
+        if not files:
+            messagebox.showinfo(APP_TITLE, "No classified images found yet.\n\n"
+                                "They are written by 'Run analysis' (and the CNN) as\n"
+                                "<sample>_classified_overlay.png in each sample's\n"
+                                "'edited_results' folder, or in 'Save results to'.")
+            return
+        from PIL import Image, ImageTk
+        win = tk.Toplevel(self.root)
+        win.title(f"Classified images ({len(files)})")
+        win.geometry("1250x850")
+        side = ttk.Frame(win)
+        side.pack(side="left", fill="y", padx=6, pady=6)
+        lb = tk.Listbox(side, width=34, exportselection=False, activestyle="none")
+        lb.pack(fill="y", expand=True)
+        for fp in files:
+            name = os.path.basename(fp)
+            lb.insert("end", name.replace("_classified_overlay.png", "")
+                      .replace("_cnn_overlay.png", "  (CNN)"))
+        bar = ttk.Frame(side)
+        bar.pack(fill="x", pady=(6, 0))
+        info = ttk.Label(win, text="", foreground="#555")
+        info.pack(anchor="w", padx=6, pady=(6, 0))
+        canvas = tk.Label(win, background="#111")
+        canvas.pack(fill="both", expand=True, padx=6, pady=6)
+        state = {"photo": None}
+
+        def show(_e=None):
+            sel = lb.curselection()
+            if not sel:
+                return
+            fp = files[sel[0]]
+            try:
+                w = max(300, canvas.winfo_width() - 4)
+                h = max(300, canvas.winfo_height() - 4)
+                with Image.open(fp) as im:
+                    full = im.size
+                    im = im.convert("RGB")
+                    im.thumbnail((w, h))
+                    state["photo"] = ImageTk.PhotoImage(im)
+                canvas.config(image=state["photo"])
+                info.config(text=f"{fp}   ({full[0]} x {full[1]} px - 'Open full size' "
+                                 "to zoom in)")
+            except Exception as exc:
+                info.config(text=f"could not show {fp}: {exc}")
+
+        def step(d):
+            i = (lb.curselection() or (0,))[0]
+            i = (i + d) % len(files)
+            lb.selection_clear(0, "end")
+            lb.selection_set(i)
+            lb.see(i)
+            show()
+
+        ttk.Button(bar, text="<", width=3, command=lambda: step(-1)).pack(side="left")
+        ttk.Button(bar, text=">", width=3, command=lambda: step(+1)).pack(side="left", padx=2)
+        ttk.Button(bar, text="Open full size", command=lambda: lb.curselection() and
+                   self._open_path(files[lb.curselection()[0]])).pack(side="left", padx=4)
+        ttk.Button(side, text="Open its folder", command=lambda: lb.curselection() and
+                   self._open_path(os.path.dirname(files[lb.curselection()[0]])))\
+            .pack(fill="x", pady=(4, 0))
+        lb.bind("<<ListboxSelect>>", show)
+        for k, d in (("<Left>", -1), ("<Right>", 1)):
+            win.bind(k, lambda e, d=d: (step(d), "break")[1])
+        canvas.bind("<Configure>", lambda e: show())
+        lb.selection_set(0)
+        win.after(120, show)
+
     def _open_results(self):
+        out = self.output_var.get().strip()
+        if out and os.path.isdir(out):
+            return self._open_path(out)
         parent = getattr(self, "last_parent", None) or self.parent_var.get().strip()
         if not os.path.isdir(parent):
             messagebox.showinfo(APP_TITLE, "No results folder yet.")

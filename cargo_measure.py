@@ -38,8 +38,9 @@ THE SCIENCE IS UNCHANGED. For each cell:
 OUTPUTS (identical names and columns to the macro version):
     <base>_results.csv            one row per cell, semicolon separated
     <base>_summary.csv            totals + both release percentages
-    <base>_classified_overlay.png QC image: green=released, red=not released,
-                                  cyan=very bright, grey=no signal
+    <base>_classified_overlay.png QC image: outline colour = class (green
+                                  released, red not released, cyan very
+                                  bright, blue no signal), legend + counts
     <base>_log.txt                what happened
 =============================================================================
 """
@@ -761,44 +762,104 @@ def write_summary(rows, base, path, total_cells, threshold=None,
     return released, not_rel, pct_rel, pct_abs
 
 
-def write_overlay(fluor_rgb, labels, rows, path, scale=0.25):
+OVERLAY_COLORS = {                       # class -> (RGB, legend text)
+    "released": ((40, 230, 40), "released"),
+    "released_highsignal": ((0, 230, 255), "released, very bright"),
+    "not_released": ((255, 45, 45), "not released"),
+    "excluded_negative": ((110, 140, 255), "no signal (excluded)"),
+    "excluded_too_small": ((255, 220, 0), "too small (excluded)"),
+    "excluded_invalid": ((255, 220, 0), "invalid (excluded)"),
+}
+
+
+def write_overlay(fluor_rgb, labels, rows, path, max_side=4000, scale=None):
     """
-    QC image: each cell outlined in its class colour.
-    Written at reduced scale - a 5950x4468 RGB overlay is ~80 MB and nobody
-    inspects it at full resolution.
+    QC image: every cell outlined in the colour of its class, on the
+    fluorescence shown in GREY (so green "released" outlines stay visible) and
+    contrast-stretched for viewing only (0.5-99.8 percentile). A header line
+    gives the colour legend and the counts.
+
+    Size: full resolution up to max_side px on the longer side (stitched BZ-X
+    images, ~3000 px, stay full size); larger images are reduced by a whole
+    number so a cell keeps a readable outline. `scale` forces a factor.
     """
-    from PIL import Image
+    from PIL import Image, ImageDraw, ImageFont
     from scipy import ndimage
 
-    colors = {
-        "released": (0, 255, 0),
-        "released_highsignal": (0, 255, 255),
-        "not_released": (255, 0, 0),
-        "excluded_negative": (128, 128, 128),
-        "excluded_too_small": (255, 255, 0),
-        "excluded_invalid": (255, 255, 0),
-    }
+    labels = np.asarray(labels)
+    img = np.asarray(fluor_rgb)
+    if img.ndim == 3 and img.shape[-1] in (3, 4):
+        grey = img[..., :3].max(axis=-1)
+    elif img.ndim == 3:
+        grey = img.max(axis=0)
+    else:
+        grey = img
+    H = min(grey.shape[0], labels.shape[0])
+    W = min(grey.shape[1], labels.shape[1])
+    step = (max(1, int(round(1 / scale))) if scale else
+            max(1, int(np.ceil(max(H, W) / float(max_side)))))
+    lab = labels[:H:step, :W:step]
+    g = grey[:H:step, :W:step].astype(np.float32)
+    lo, hi = np.percentile(g, [0.5, 99.8])
+    g = np.clip((g - lo) / max(hi - lo, 1e-6), 0, 1) * 215.0      # keep room for colour
+    out = np.repeat(g[..., None], 3, axis=2).astype(np.uint8)
 
-    small_lab = labels[::int(1 / scale), ::int(1 / scale)]
-    base_img = fluor_rgb[::int(1 / scale), ::int(1 / scale)]
-    if base_img.ndim == 2:
-        base_img = np.stack([base_img] * 3, axis=-1)
-    out = np.ascontiguousarray(base_img[:, :, :3].astype(np.uint8))
+    names = list(OVERLAY_COLORS)
+    lut = np.full(int(lab.max()) + 1, -1, dtype=np.int32)
+    counts = {}
+    for r in rows:
+        cls = r.get("Class", "")
+        counts[cls] = counts.get(cls, 0) + 1
+        cid = int(r["CellID"])
+        if cls in OVERLAY_COLORS and 0 <= cid < len(lut):
+            lut[cid] = names.index(cls)
 
-    cls_by_id = {r["CellID"]: r["Class"] for r in rows}
+    # outline = label pixels touching another value; 2 px wide on big images
+    edge = (lab > 0) & ((lab != ndimage.grey_erosion(lab, size=(3, 3))) |
+                        (lab != ndimage.grey_dilation(lab, size=(3, 3))))
+    edge_lab = np.where(edge, lab, 0)
+    if out.shape[1] >= 1200:
+        edge_lab = np.where(edge_lab > 0, edge_lab,
+                            np.where(lab > 0, ndimage.grey_dilation(edge_lab, size=(3, 3)), 0))
+    ids = edge_lab[edge_lab > 0]
+    yy, xx = np.nonzero(edge_lab > 0)
+    k = lut[ids]
+    pal = np.array([OVERLAY_COLORS[n][0] for n in names], dtype=np.uint8)
+    ok = k >= 0
+    out[yy[ok], xx[ok]] = pal[k[ok]]
 
-    # outline = pixels of a label that touch a different value
-    eroded = ndimage.grey_erosion(small_lab, size=(3, 3))
-    edges = (small_lab > 0) & (small_lab != eroded)
-    ids = small_lab[edges]
-    yy, xx = np.nonzero(edges)
-    for cls, col in colors.items():
-        sel = np.array([cls_by_id.get(int(i), "") == cls for i in ids], dtype=bool)
-        if sel.any():
-            out[yy[sel], xx[sel]] = col
-
-    Image.fromarray(out).save(path)
-    return out.shape
+    # header with legend and counts
+    hh = max(26, out.shape[1] // 55)
+    canvas = Image.new("RGB", (out.shape[1], out.shape[0] + hh), (20, 20, 20))
+    canvas.paste(Image.fromarray(out), (0, hh))
+    d = ImageDraw.Draw(canvas)
+    try:
+        font = ImageFont.load_default(size=int(hh * 0.62))
+    except TypeError:                                   # Pillow < 10.1
+        font = ImageFont.load_default()
+    x = int(hh * 0.4)
+    for n in names:
+        if not counts.get(n):
+            continue
+        col, txt = OVERLAY_COLORS[n]
+        d.rectangle([x, int(hh * 0.25), x + int(hh * 0.5), int(hh * 0.75)], outline=col,
+                    width=max(2, hh // 12))
+        x += int(hh * 0.7)
+        t = f"{txt}: {counts[n]}"
+        d.text((x, int(hh * 0.18)), t, fill=(235, 235, 235), font=font)
+        try:
+            x += int(d.textlength(t, font=font)) + int(hh * 0.9)
+        except AttributeError:
+            x += len(t) * 7 + int(hh * 0.9)
+    if step > 1:
+        t = f"shown at 1/{step} size"
+        try:
+            tw = int(d.textlength(t, font=font))
+        except AttributeError:
+            tw = len(t) * 7
+        d.text((canvas.width - tw - int(hh * 0.4), int(hh * 0.18)), t, fill=(150, 150, 150), font=font)
+    canvas.save(path)
+    return canvas.size
 
 
 def run_sample(fluor_path, mask_path, out_dir, base, cfg,

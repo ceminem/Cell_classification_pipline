@@ -142,7 +142,7 @@ Per sample, in `<sample>\edited_results\` (or under the folder chosen with
 |---|---|
 | `<base>_results.csv` | one row per cell: all features + `Class` |
 | `<base>_summary.csv` | one row: counts, both release percentages, method, threshold used, analysis version, settings hash |
-| `<base>_classified_overlay.png` | QC image at ¼ scale: outline colour = class |
+| `<base>_classified_overlay.png` | QC image: every cell outlined in its class colour (green released, red not released, cyan very bright, blue no signal, yellow too small) on the fluorescence shown in grey and contrast-stretched for viewing; header with legend and counts. Full size up to 4000 px on the longer side (stitched BZ-X images stay full size), larger images reduced by a whole number. *Show classified images* on the Run tab lists them all. |
 | `<base>_log.txt` | everything the measurement step printed |
 
 Next to the images: `<base>_cp_masks.tif` (16-bit label mask from Cellpose) and

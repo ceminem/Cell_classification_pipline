@@ -87,6 +87,14 @@ First time: open the **Setup check** tab → *Run setup check* → all green.
 **Run** tab → *Browse…* the parent folder (the one holding A1, A2, …) → tick
 samples → *Run analysis*.
 
+Afterwards *Show classified images* shows every cell outlined in its class
+(green released, red not released, cyan very bright, blue no signal, yellow
+too small), with the counts in the header. The files are
+`<sample>_classified_overlay.png` in each sample's `edited_results` folder (or
+in *Save results to*). Look through them before trusting the percentages.
+Older results get the new, larger overlay by running *Run analysis* again; the
+masks are reused, so this takes seconds per sample.
+
 ---
 
 ## Part 3a — Stitching BZ-X tiles (Stitching tab)

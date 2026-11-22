@@ -8,6 +8,16 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 
 Analysis version unchanged (3.1): rule results are identical to before.
 
+### Changed
+- **Classified images** (`_classified_overlay.png`, `_cnn_overlay.png`) are
+  now readable: full size up to 4000 px (was a fixed 1/4 size - ~740 px for
+  a stitched image), outlines 2 px, drawn on the fluorescence in grey and
+  contrast-stretched (green "released" outlines were invisible on the green
+  image), with a legend and the counts per class. Numbers unchanged.
+- Run tab: **Show classified images** opens a viewer with every overlay of
+  the data / results folder; *Open results folder* opens *Save results to*
+  when that is set.
+
 ### Fixed
 - Stitching: "no BZ-X tiles found" when *Save stitched to* was the tiles
   folder itself or a folder above it; with the tiles folder as output, the
