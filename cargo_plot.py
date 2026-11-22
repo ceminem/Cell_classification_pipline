@@ -94,7 +94,23 @@ VALUE_COLUMNS = [
     ("PercentReleased_relative", "% released (of cells with signal)"),
     ("PercentReleased_absolute", "% released (of all cells)"),
     ("PercentUptake", "% of cells with any uptake"),
+    # cell count (cell_count_summary.csv, one row per image)
+    ("n_counted", "Cells counted per image"),
+    ("density_per_mm2", "Cells per mm² (counting frame)"),
+    ("n_unbiased_frame", "Cells in the counting frame"),
+    ("coverage_pct", "Area covered by cells (%)"),
+    ("median_area_um2", "Median cell area (µm²)"),
+    ("median_diameter_um", "Median cell diameter (µm)"),
 ]
+# default y-axis label per value
+VALUE_YLABEL = {
+    "PercentReleased_relative": "% released", "PercentReleased_absolute": "% released",
+    "PercentUptake": "% uptake", "n_counted": "Cells per image",
+    "density_per_mm2": "Cells per mm²", "n_unbiased_frame": "Cells per field",
+    "coverage_pct": "Area covered (%)", "median_area_um2": "Cell area (µm²)",
+    "median_diameter_um": "Cell diameter (µm)",
+}
+COUNT_TEXT = ("sample", "image", "file", "edge_rule", "model")
 
 
 def read_summaries(paths):
@@ -106,7 +122,15 @@ def read_summaries(paths):
     for p in paths:
         try:
             with open(p, newline="", encoding="utf-8-sig") as fh:
-                for r in csv.DictReader(fh, delimiter=";"):
+                head = fh.readline()
+                fh.seek(0)
+                delim = ";" if head.count(";") >= head.count(",") else ","
+                reader = csv.DictReader(fh, delimiter=delim)
+                fields = [f.strip() for f in (reader.fieldnames or [])]
+                if "n_counted" in fields and "image" in fields:
+                    rows.extend(_count_rows(reader, p))
+                    continue
+                for r in reader:
                     if not r.get("Sample"):
                         continue
                     out = {"Sample": r["Sample"].strip(),
@@ -132,6 +156,39 @@ def read_summaries(paths):
         except OSError:
             continue
     return rows
+
+
+def _count_rows(reader, path):
+    """cell_count_summary.csv (Cell count tab): one row per image. The image
+    is the sample, its folder ("sample" column) the label, so bars default to
+    one per folder with the images as points."""
+    out = []
+    for r in reader:
+        img = (r.get("image") or "").strip()
+        if not img:
+            continue
+        folder = (r.get("sample") or "").strip()
+        row = {"Sample": img, "SourceFile": os.path.basename(path), "Well": "",
+               "Label": folder, "Condition": "", "AnalysisVersion": "",
+               "SettingsHash": "", "Method": "cell count", "Kind": "count"}
+        for k, v in r.items():
+            if k is None or k in COUNT_TEXT:
+                continue
+            try:
+                row[k] = float(str(v).replace(",", "."))
+            except (TypeError, ValueError):
+                row[k] = v
+        out.append(row)
+    return out
+
+
+def available_values(rows):
+    """VALUE_COLUMNS entries that at least one loaded row has a number for."""
+    have = []
+    for k, d in VALUE_COLUMNS:
+        if any(isinstance(r.get(k), float) and np.isfinite(r.get(k)) for r in rows):
+            have.append((k, d))
+    return have
 
 
 # ── statistics ─────────────────────────────────────────────────────────────

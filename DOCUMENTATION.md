@@ -1288,6 +1288,13 @@ cells per mm² when calibrated. Descriptive only, no significance test:
 fields of one well are technical replicates, not independent samples.
 Files `figures/cell_count_bar_chart.png/.pdf`, `cell_density_bar_chart…`.
 
+**Figures tab.** `cell_count_summary.csv` can be loaded in the Figures tab
+(*Add summary CSV…*, or *Plot in Figures tab* on the Cell count tab). Each
+image is one value; the bars default to one per image folder (the `sample`
+column), so the images of a folder are its (technical) replicates. Values:
+cells counted per image, cells per mm² (counting frame), cells in the counting
+frame, area covered (%), median cell area (µm²), median diameter (µm).
+
 **Excel.** `cell_count.xlsx`: *Summary* (one row per image), *Samples*
 (mean, SD, total per sample, with the bar charts as Excel charts), and one
 sheet per image with every cell. openpyxl is installed automatically on

@@ -145,6 +145,13 @@ For images that have only brightfield (no fluorescence):
    condition name) under one parent folder and add the parent folder: one bar
    per sample folder.
 
+7. *Plot in Figures tab >* loads `cell_count_summary.csv` into the **Figures**
+   tab: one bar per image folder (mean of its images, every image a dot),
+   with the palettes, statistics and PNG/PDF/SVG export there. *Value* switches
+   between cells per image, cells per mm², area covered, cell area and
+   diameter. You can also load the CSV there with *Add summary CSV…*, together
+   with release summaries.
+
 Changing only the figure (colour, line width, labels) is quick: the masks are
 reused. Tick *segment again* after changing Cellpose settings.
 

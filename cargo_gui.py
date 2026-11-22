@@ -672,7 +672,7 @@ class CargoGUI:
             values=[d for _, d in cp.VALUE_COLUMNS])
         self.plot_value_cb.current(0)
         self.plot_value_cb.pack(side="left")
-        self.plot_value_cb.bind("<<ComboboxSelected>>", lambda e: self._plot_refresh())
+        self.plot_value_cb.bind("<<ComboboxSelected>>", lambda e: self._plot_value_changed())
 
         # ---------------- groups ----------------
         gb = ttk.LabelFrame(ctrl, text="2. Groups  (one bar per group)")
@@ -899,26 +899,72 @@ class CargoGUI:
 
     # ---------------------------------------------------- figures logic ---
 
-    def _plot_add_files(self):
-        paths = filedialog.askopenfilenames(
-            title="Choose batch_summary.csv or *_summary.csv files",
-            filetypes=[("CSV", "*.csv"), ("All files", "*.*")])
+    def _plot_add_files(self, paths=None):
+        if paths is None:
+            paths = filedialog.askopenfilenames(
+                title="Choose batch_summary.csv, *_summary.csv or cell_count_summary.csv",
+                filetypes=[("CSV", "*.csv"), ("All files", "*.*")])
         if not paths:
             return
         new = cp.read_summaries(paths)
         if not new:
             messagebox.showerror(APP_TITLE,
                                  "No sample rows found in those files.\n"
-                                 "Expected a semicolon CSV with a Sample column.")
+                                 "Expected a release summary (semicolon CSV with a "
+                                 "Sample column) or a cell_count_summary.csv.")
             return
+        first = len(self.plot_rows_data)
+        keep = {i: v.get() for i, v in self.plot_group_vars.items()}
         self.plot_rows_data.extend(new)
         self._plot_build_rows()
+        for i, val in keep.items():
+            if i in self.plot_group_vars:
+                self.plot_group_vars[i].set(val)
+        # cell counts: one bar per image folder straight away, images as points
+        for i in range(first, len(self.plot_rows_data)):
+            r = self.plot_rows_data[i]
+            if r.get("Kind") == "count" and i in self.plot_group_vars:
+                self.plot_group_vars[i].set((r.get("Label") or "all images")[:30])
+        self._plot_update_values(prefer_count=all(r.get("Kind") == "count" for r in new))
         self._plot_refresh()
+
+    def _plot_update_values(self, prefer_count=False):
+        """Offer only values the loaded files contain (release % and/or counts)."""
+        have = cp.available_values(self.plot_rows_data) or list(cp.VALUE_COLUMNS[:1])
+        descs = [d for _k, d in have]
+        self.plot_value_cb.config(values=descs)
+        cur = self.plot_value_cb.get()
+        if prefer_count:
+            pick = next((d for k, d in have if k == "n_counted"), None)
+            if pick:
+                cur = pick
+        if cur not in descs:
+            cur = descs[0]
+        self.plot_value_cb.set(cur)
+        self._plot_value_changed(refresh=False)
+
+    def _plot_value_changed(self, refresh=True):
+        """Follow the value with the y label, unless the user typed their own."""
+        key = next((k for k, d in cp.VALUE_COLUMNS if d == self.plot_value_cb.get()), None)
+        defaults = set(cp.VALUE_YLABEL.values())
+        if key and self.p_ylabel.get().strip() in defaults | {""}:
+            self.p_ylabel.set(cp.VALUE_YLABEL.get(key, ""))
+        if refresh:
+            self._plot_refresh()
+
+    def plot_load_count(self, csv_path):
+        """Load a cell_count_summary.csv into the Figures tab and show it."""
+        self._plot_add_files([csv_path])
+        try:
+            self.nb.select(self.tab_plot)
+        except Exception:
+            pass
 
     def _plot_clear(self):
         self.plot_rows_data = []
         self.plot_group_vars = {}
         self._plot_build_rows()
+        self._plot_update_values()
         self._plot_refresh()
 
     def _plot_build_rows(self):
@@ -1771,6 +1817,11 @@ class CargoGUI:
         self.count_stop_btn.pack(side="left")
         ttk.Button(r, text="Open results folder", command=lambda: self._open_path(
             self._count_outdir())).pack(side="left", padx=6)
+        b = ttk.Button(r, text="Plot in Figures tab  >", command=self._count_to_figures)
+        b.pack(side="left")
+        ToolTip(b, "Loads cell_count_summary.csv into the Figures tab: one bar per\n"
+                   "image folder (mean of its images, each image a dot), with the\n"
+                   "palettes, statistics and export of the Figures tab.")
         self.count_status = ttk.Label(r, text="", foreground="#666")
         self.count_status.pack(side="right")
 
@@ -1814,6 +1865,29 @@ class CargoGUI:
             filetypes=[("Images", "*.tif *.tiff *.png *.jpg *.jpeg"), ("All files", "*.*")])
         for p in fs:
             self.count_list.insert("end", os.path.normpath(p))
+
+    def _count_to_figures(self):
+        p = os.path.join(self._count_outdir(), "cell_count_summary.csv")
+        if not os.path.isfile(p):
+            p = filedialog.askopenfilename(
+                title="cell_count_summary.csv", initialdir=self._count_outdir()
+                if os.path.isdir(self._count_outdir()) else None,
+                filetypes=[("CSV", "*.csv")])
+            if not p:
+                return
+        if not PLOT_OK:
+            messagebox.showinfo(APP_TITLE, "matplotlib is not installed - no figures.")
+            return
+        # replace earlier cell counts of the same file, keep everything else
+        keep = [(r, self.plot_group_vars[i].get() if i in self.plot_group_vars else "")
+                for i, r in enumerate(self.plot_rows_data)
+                if not (r.get("Kind") == "count" and
+                        r.get("SourceFile") == os.path.basename(p))]
+        self.plot_rows_data = [r for r, _g in keep]
+        self._plot_build_rows()
+        for i, (_r, g) in enumerate(keep):
+            self.plot_group_vars[i].set(g)
+        self.plot_load_count(p)
 
     def _count_outdir(self):
         out = self.count_out_var.get().strip()

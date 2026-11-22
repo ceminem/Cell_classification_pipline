@@ -14,6 +14,11 @@ Analysis version unchanged (3.1): rule results are identical to before.
   a stitched image), outlines 2 px, drawn on the fluorescence in grey and
   contrast-stretched (green "released" outlines were invisible on the green
   image), with a legend and the counts per class. Numbers unchanged.
+- Figures tab: **cell counts** can be plotted. `cell_count_summary.csv`
+  loads like a release summary (also mixed with them); bars default to one
+  per image folder with the images as dots; *Value* offers cells per image,
+  cells per mm², area covered, cell area and diameter, and the y label
+  follows. Cell count tab: *Plot in Figures tab >* hands the results over.
 - Figures tab: **every bar gets its own colour** from the chosen palette,
   also without replicates and in the grouped layout with one bar per group
   (there all bars were the same colour). Palettes have 12 colours (the first
