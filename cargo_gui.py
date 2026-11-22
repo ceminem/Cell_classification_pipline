@@ -566,6 +566,43 @@ class CargoGUI:
             out.append("Column headers read as: " + "; ".join(notes))
         self.lbl_prev.insert("1.0", "\n".join(out))
 
+    def _bind_plot_wheel(self, area):
+        """Mouse wheel over the Figures controls scrolls them; over the sample
+        list it scrolls the list (until that reaches its end)."""
+        def wheel(e):
+            if getattr(e, "num", None) == 4:
+                d = -1
+            elif getattr(e, "num", None) == 5:
+                d = 1
+            else:
+                d = -1 if e.delta > 0 else 1
+            w = self.root.winfo_containing(e.x_root, e.y_root)
+            inner = getattr(self, "_plot_rows_canvas", None)
+            node = w
+            while node is not None and inner is not None:
+                if node is inner:
+                    top, bot = inner.yview()
+                    if (d < 0 and top > 0) or (d > 0 and bot < 1):
+                        inner.yview_scroll(d, "units")
+                        return "break"
+                    break
+                node = node.master
+            cc = self._plot_ctrl_canvas
+            top, bot = cc.yview()
+            if not (top <= 0 and bot >= 1):
+                cc.yview_scroll(d * 2, "units")
+            return "break"
+
+        def on(_e):
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                self.root.bind_all(seq, wheel)
+
+        def off(_e):
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                self.root.unbind_all(seq)
+        area.bind("<Enter>", on)
+        area.bind("<Leave>", off)
+
     def _build_plot_tab(self):
         """
         Figures tab: load batch summaries, assign samples to groups, style the
@@ -588,10 +625,22 @@ class CargoGUI:
 
         outer = ttk.PanedWindow(f, orient="horizontal")
         outer.pack(fill="both", expand=True, padx=4, pady=4)
-        ctrl = ttk.Frame(outer)
+        # the controls column scrolls: on a laptop screen "4. Style" and the
+        # buttons below it do not fit
+        ctrl_box = ttk.Frame(outer)
         view = ttk.Frame(outer)
-        outer.add(ctrl, weight=2)
+        outer.add(ctrl_box, weight=2)
         outer.add(view, weight=3)
+        cc = tk.Canvas(ctrl_box, highlightthickness=0, borderwidth=0)
+        csb = ttk.Scrollbar(ctrl_box, orient="vertical", command=cc.yview)
+        cc.configure(yscrollcommand=csb.set)
+        csb.pack(side="right", fill="y")
+        cc.pack(side="left", fill="both", expand=True)
+        ctrl = ttk.Frame(cc)
+        ctrl_win = cc.create_window((0, 0), window=ctrl, anchor="nw")
+        ctrl.bind("<Configure>", lambda e, c=cc: c.configure(scrollregion=c.bbox("all")))
+        cc.bind("<Configure>", lambda e, c=cc, w=ctrl_win: c.itemconfigure(w, width=e.width))
+        self._plot_ctrl_canvas = cc
 
         # ---------------- data ----------------
         db = ttk.LabelFrame(ctrl, text="1. Data")
@@ -627,6 +676,7 @@ class CargoGUI:
             .pack(anchor="w", padx=8, pady=(2, 4))
 
         canv = tk.Canvas(gb, highlightthickness=0, height=200)
+        self._plot_rows_canvas = canv
         sb = ttk.Scrollbar(gb, orient="vertical", command=canv.yview)
         self.plot_rows_frame = ttk.Frame(canv)
         self.plot_rows_frame.bind(
@@ -817,8 +867,22 @@ class CargoGUI:
         self.plot_group_vars = {}
         self.plot_canvas = None
         self.plot_fig = None
+        self._bind_plot_wheel(ctrl_box)
+        # the canvas does not ask for the width of what it holds: give it that
+        def fit(c=cc, fr=ctrl, pw=outer, sb=csb):
+            need = fr.winfo_reqwidth() + sb.winfo_reqwidth() + 4
+            c.configure(width=fr.winfo_reqwidth())
+            total = pw.winfo_width()
+            if total > 50:
+                try:
+                    pw.sashpos(0, min(need, int(total * 0.55)))
+                except tk.TclError:
+                    pass
+        self.root.after(80, fit)
+        self.tab_plot.bind("<Map>", lambda e: self.root.after(30, fit), add="+")
 
     # ---------------------------------------------------- figures logic ---
+
     def _plot_add_files(self):
         paths = filedialog.askopenfilenames(
             title="Choose batch_summary.csv or *_summary.csv files",

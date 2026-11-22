@@ -14,6 +14,11 @@ Analysis version unchanged (3.1): rule results are identical to before.
   a stitched image), outlines 2 px, drawn on the fluorescence in grey and
   contrast-stretched (green "released" outlines were invisible on the green
   image), with a legend and the counts per class. Numbers unchanged.
+- Figures tab: the controls column **scrolls** (mouse wheel or scroll bar),
+  so *4. Style* and the buttons below it are reachable on a laptop screen.
+- Sample log: the rule line now shows the rule actually used
+  (`MeanWhole >= <threshold> AND CoreCV <= 0.65`); it printed the old
+  fill-ratio thresholds of version 1, which were not applied.
 - Run tab: **Show classified images** opens a viewer with every overlay of
   the data / results folder; *Open results folder* opens *Save results to*
   when that is set.

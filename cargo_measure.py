@@ -968,8 +968,13 @@ def run_sample(fluor_path, mask_path, out_dir, base, cfg,
                 "blobs can bleed over neighbouring cells; consider excluding it.")
     log(_percentile_line("CoreFillRatio percentiles", fills))
     log(_percentile_line("CoreCV percentiles", cvs))
-    log(f"thresholds: fillRatio>={cfg['fill_ratio_threshold']} "
-        f"AND coreCV<={cfg['core_cv_threshold']}")
+    if cfg.get("method", "brightness") == "brightness":
+        cap = cfg.get("core_cv_cap")
+        log(f"rule used: released = MeanWhole >= {used_threshold:.2f}"
+            + (f" AND CoreCV <= {cap}" if cap is not None else ""))
+    else:
+        log(f"rule used (legacy texture): fillRatio>={cfg['fill_ratio_threshold']} "
+            f"AND coreCV<={cfg['core_cv_threshold']}")
     if len(fills) and np.median(fills) > 0.95 and len(cvs) and np.median(cvs) < 0.10:
         log("WARNING features look degenerate (fillRatio~1, CV~0) - the measured "
             "image may not be a real fluorescence channel.")
