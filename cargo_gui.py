@@ -566,6 +566,14 @@ class CargoGUI:
             out.append("Column headers read as: " + "; ".join(notes))
         self.lbl_prev.insert("1.0", "\n".join(out))
 
+    def _draw_swatches(self):
+        c = getattr(self, "p_swatch", None)
+        if c is None:
+            return
+        c.delete("all")
+        for i, col in enumerate(cp.bar_colors(self.p_pal.get(), 12)):
+            c.create_rectangle(i * 18 + 1, 2, i * 18 + 15, 15, fill=col, outline="#555")
+
     def _bind_plot_wheel(self, area):
         """Mouse wheel over the Figures controls scrolls them; over the sample
         list it scrolls the list (until that reaches its end)."""
@@ -820,7 +828,15 @@ class CargoGUI:
         pcb = ttk.Combobox(r, textvariable=self.p_pal, state="readonly", width=16,
                            values=list(cp.PALETTES))
         pcb.pack(side="left", padx=4)
-        pcb.bind("<<ComboboxSelected>>", lambda e: self._plot_refresh())
+        pcb.bind("<<ComboboxSelected>>", lambda e: (self._draw_swatches(), self._plot_refresh()))
+
+        sw = ttk.Frame(yb)
+        sw.pack(fill="x", padx=6, pady=(0, 2))
+        self.p_swatch = tk.Canvas(sw, height=16, width=12 * 18, highlightthickness=0)
+        self.p_swatch.pack(side="left", padx=(56, 0))
+        ttk.Label(sw, text="one colour per bar (right-click a bar to change it)",
+                  foreground="#666", font=("Segoe UI", 8)).pack(side="left", padx=6)
+        self._draw_swatches()
 
         ttk.Label(r, text="Error:").pack(side="left", padx=(8, 0))
         self.p_err = tk.StringVar(value="SD")

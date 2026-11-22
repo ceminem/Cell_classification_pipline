@@ -49,13 +49,46 @@ except ImportError:
     HAVE_MPL = False
 
 
+# 12 colours each; the first four are the original ones, so earlier figures
+# keep their colours. Every bar gets its own colour (see bar_colors).
 PALETTES = {
-    "Grey / Blue":   ["#8c8c8c", "#4c72b0", "#dd8452", "#55a868"],
-    "Colourblind":   ["#0173b2", "#de8f05", "#029e73", "#cc78bc"],
-    "Warm":          ["#c44e52", "#dd8452", "#937860", "#8c8c8c"],
-    "Mono":          ["#333333", "#777777", "#aaaaaa", "#cccccc"],
-    "Nature-ish":    ["#3b6ea5", "#c1524e", "#e0a458", "#5c8a5c"],
+    "Grey / Blue":   ["#8c8c8c", "#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3",
+                      "#937860", "#da8bc3", "#ccb974", "#64b5cd", "#2f4b7c", "#b07aa1"],
+    "Colourblind":   ["#0173b2", "#de8f05", "#029e73", "#cc78bc", "#d55e00", "#56b4e9",
+                      "#ca9161", "#fbafe4", "#949494", "#ece133", "#004d80", "#8c510a"],
+    "Warm":          ["#c44e52", "#dd8452", "#937860", "#8c8c8c", "#e3a33b", "#a0522d",
+                      "#d9776b", "#b5651d", "#f2c14e", "#7f3b3b", "#e88d67", "#6e4b3a"],
+    "Mono":          ["#333333", "#777777", "#aaaaaa", "#cccccc", "#555555", "#999999",
+                      "#bbbbbb", "#444444", "#888888", "#dddddd", "#666666", "#222222"],
+    "Nature-ish":    ["#3b6ea5", "#c1524e", "#e0a458", "#5c8a5c", "#8e6c8a", "#4aa3a2",
+                      "#d17a22", "#7a7a7a", "#a9c1d9", "#b5838d", "#2e4057", "#9bb35a"],
 }
+
+
+def _mix(hexcol, other, t):
+    a = [int(hexcol[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(other[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
+
+def bar_colors(palette, n):
+    """n colours from a palette, all different: the palette's own colours
+    first, then lighter, then darker versions of them for more bars."""
+    base = PALETTES.get(palette, PALETTES["Grey / Blue"])
+    shades = [("#ffffff", 0.45), ("#000000", 0.35), ("#ffffff", 0.7), ("#000000", 0.6)]
+    out = list(base)
+    k = 0
+    while len(out) < n:
+        target, t = shades[(k // len(base)) % len(shades)]
+        col = _mix(base[k % len(base)], target, t)
+        j = 1
+        while col in out and j < 20:                     # e.g. greys in "Mono"
+            col = _mix(base[k % len(base)], target, min(0.9, t + 0.04 * j))
+            j += 1
+        out.append(col)
+        k += 1
+    return out[:max(n, 0)]
+
 
 VALUE_COLUMNS = [
     ("PercentReleased_relative", "% released (of cells with signal)"),
@@ -482,6 +515,13 @@ def make_figure(groups, opts):
         bw = cluster_w / n_series
         x = np.arange(n_clusters)
 
+        # one bar per cluster (no series to tell apart): colour by cluster,
+        # so every bar still gets its own colour
+        per_cluster = n_series == 1
+        ccols = [opts.get("colors", {}).get(g[0], c)
+                 for g, c in zip(groups, bar_colors(opts.get("palette", "Grey / Blue"),
+                                                    n_clusters))]
+        scols = bar_colors(opts.get("palette", "Grey / Blue"), n_series)
         for si, s in enumerate(series):
             means, errs, offs = [], [], []
             for ci, (_lab, d) in enumerate(groups):
@@ -492,7 +532,7 @@ def make_figure(groups, opts):
             ax.bar(offs, means,
                    yerr=errs if opts.get("show_error", True) else None,
                    width=bw * 0.92, label=s,
-                   color=pal[si % len(pal)],
+                   color=ccols if per_cluster else opts.get("colors", {}).get(s, scols[si]),
                    edgecolor=opts.get("edge", "#333333"),
                    linewidth=opts.get("linewidth", 1.0),
                    capsize=opts.get("capsize", 3), zorder=2)
@@ -517,7 +557,8 @@ def make_figure(groups, opts):
         means = [v.mean() if len(v) else np.nan for v in vals]
         errs = [spread(v) for v in vals]
         x = np.arange(len(groups))
-        colors = [opts.get("colors", {}).get(labels[i], pal[i % len(pal)])
+        auto = bar_colors(opts.get("palette", "Grey / Blue"), len(groups))
+        colors = [opts.get("colors", {}).get(labels[i], auto[i])
                   for i in range(len(groups))]
         ctype = opts.get("chart_type", "bar")
 
