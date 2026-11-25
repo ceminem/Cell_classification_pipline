@@ -30,9 +30,21 @@ import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
+
+# overlay tint colours (0..1 RGB weights)
+OVERLAY_COLORS = {
+    "green": (0.0, 1.0, 0.0), "magenta": (1.0, 0.0, 1.0), "red": (1.0, 0.0, 0.0),
+    "cyan": (0.0, 1.0, 1.0), "yellow": (1.0, 1.0, 0.0), "blue": (0.25, 0.4, 1.0),
+    "white": (1.0, 1.0, 1.0),
+}
+SOURCE_MODES = ("auto", "stitched", "all images")
+
+STITCHED_BF = re.compile(r"^(?P<pos>.+?)_brightfield\.tiff?$", re.IGNORECASE)
+STITCHED_FL = re.compile(r"^(?P<pos>.+?)_fluorescence(?P<ch>_[^.]*)?\.tiff?$", re.IGNORECASE)
+RAW_TILE = re.compile(r"_\d{5}_(CH\d|Overlay)\.", re.IGNORECASE)
 
 # files the analysis pipeline writes next to the raw images: never a panel
 GENERATED_MARKERS = ("_cp_masks", "_brightfield_for_cellpose", "_classified_overlay",
@@ -82,6 +94,14 @@ class CollageConfig:
 
     # skip files written by the pipeline (masks, overlays) when scanning
     exclude_generated: bool = True
+    # "auto": stitched images (<pos>_brightfield.tif + <pos>_fluorescence.tif,
+    # in the folder or in <folder>_stitched) when there are any, else every
+    # image of each subfolder; "stitched" / "all images" force one of them
+    source_mode: str = "auto"
+    # extra column: brightfield (dimmed) + fluorescence in a colour
+    overlay: bool = True
+    overlay_color: str = "green"
+    overlay_bf_percent: float = 60.0
     # one linear contrast stretch per COLUMN (same for every row, so rows stay
     # comparable): makes dim fluorescence visible without per-image tricks
     column_contrast: bool = False
@@ -151,10 +171,85 @@ def natural_key(s):
     return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", s)]
 
 
+def stitched_roots(folder):
+    """Where stitched images of this folder can be: the folder itself and the
+    stitcher's default output <folder>_stitched next to it."""
+    f = os.path.abspath(folder).rstrip("\\/")
+    out = [f]
+    if not f.lower().endswith("_stitched") and os.path.isdir(f + "_stitched"):
+        out.append(f + "_stitched")
+    return out
+
+
+def discover_stitched(cfg: CollageConfig):
+    """Rows from stitched / analysed images: one row per position with its
+    <pos>_brightfield.tif and <pos>_fluorescence*.tif (any depth up to 3),
+    plus an overlay column when cfg.overlay. Returns (rows, root) or ([], None)."""
+    for root in stitched_roots(cfg.main_folder):
+        found = {}
+        base_depth = root.count(os.sep)
+        for dp, dirs, files in os.walk(root):
+            if dp.count(os.sep) - base_depth >= 3:
+                dirs[:] = []
+            dirs[:] = [d for d in dirs if d.lower() not in ("edited_results", "masks", "figures")]
+            for fn in files:
+                low = fn.lower()
+                if any(m in low for m in GENERATED_MARKERS):
+                    continue
+                m = STITCHED_BF.match(fn)
+                kind = "bf"
+                if not m:
+                    m = STITCHED_FL.match(fn)
+                    kind = "fl"
+                if not m:
+                    continue
+                key = (dp, m.group("pos"))
+                g = found.setdefault(key, {"bf": None, "fl": []})
+                if kind == "bf":
+                    g["bf"] = os.path.join(dp, fn)
+                else:
+                    g["fl"].append(os.path.join(dp, fn))
+        groups = {k: g for k, g in found.items() if g["bf"] or g["fl"]}
+        if not groups:
+            continue
+        names = {}
+        for (dp, pos) in groups:
+            names.setdefault(pos, []).append(dp)
+        rows = []
+        for (dp, pos), g in sorted(groups.items(), key=lambda kv: natural_key(
+                os.path.relpath(kv[0][0], root) + "/" + kv[0][1])):
+            name = pos
+            if len(names[pos]) > 1:
+                rel = os.path.relpath(dp, root).replace(os.sep, "/")
+                name = f"{rel}/{pos}" if rel != "." else pos
+            fl = sorted(g["fl"], key=lambda p: natural_key(os.path.basename(p)))
+            images = ([g["bf"]] if g["bf"] else []) + fl
+            if cfg.overlay and g["bf"] and fl:
+                images.append({"overlay": True, "bf": g["bf"], "fl": fl,
+                               "bf_col": 0, "fl_cols": list(range(1, 1 + len(fl)))})
+            rows.append({"name": name, "label": cfg.label_overrides.get(name, name),
+                         "images": images})
+        if cfg.subfolder_order:
+            order = {n: i for i, n in enumerate(cfg.subfolder_order)}
+            rows.sort(key=lambda r: order.get(r["name"], len(order)))
+        return rows, root
+    return [], None
+
+
 def discover_rows(cfg: CollageConfig):
     """Scan the main folder for subfolders and turn each into a row dict."""
     if not os.path.isdir(cfg.main_folder):
         raise FileNotFoundError(f"Folder does not exist: {cfg.main_folder}")
+
+    if cfg.source_mode in ("auto", "stitched"):
+        rows, _root = discover_stitched(cfg)
+        if rows:
+            return rows
+        if cfg.source_mode == "stitched":
+            raise ValueError("No stitched images (<position>_brightfield.tif / "
+                             "_fluorescence.tif) in this folder or in "
+                             f"{os.path.basename(cfg.main_folder.rstrip(os.sep))}_stitched. "
+                             "Stitch the tiles first (Stitching tab).")
 
     all_subfolders = [n for n in os.listdir(cfg.main_folder)
                       if os.path.isdir(os.path.join(cfg.main_folder, n))]
@@ -176,6 +271,11 @@ def discover_rows(cfg: CollageConfig):
         )
         if not images:
             continue
+        if sum(1 for p in images if RAW_TILE.search(os.path.basename(p))) > len(images) // 2:
+            raise ValueError(f"'{name}' holds single BZ-X tiles, not stitched images. "
+                             "Stitch them first (Stitching tab), then choose this "
+                             "folder again - the stitched images are found in "
+                             "<folder>_stitched automatically.")
         rows.append({
             "name": name,
             "label": cfg.label_overrides.get(name, name),
@@ -239,7 +339,8 @@ def column_luts(rows, cfg):
     ncol = max((len(r["images"]) for r in rows), default=0)
     luts = []
     for c in range(ncol):
-        paths = tuple(r["images"][c] for r in rows if c < len(r["images"]))
+        paths = tuple(r["images"][c] for r in rows
+                      if c < len(r["images"]) and isinstance(r["images"][c], str))
         key = (paths, tuple(os.path.getmtime(p) if os.path.exists(p) else 0 for p in paths),
                cfg.contrast_low_pct, cfg.contrast_high_pct)
         if key not in _LIMIT_CACHE:
@@ -272,6 +373,43 @@ def column_luts(rows, cfg):
                         for v in range(256)]
         luts.append(lut)
     return luts
+
+
+def _open_rgb(path, draft_to=None):
+    img = Image.open(path)
+    if draft_to:
+        img.draft("RGB", draft_to)
+    return img.convert("RGB") if img.mode != "RGB" else img
+
+
+def make_overlay(item, cfg, luts=None, draft_to=None):
+    """Brightfield in grey (dimmed to overlay_bf_percent) plus each
+    fluorescence channel as intensity in a colour - the first in
+    cfg.overlay_color, further ones in magenta, cyan, red. Additive, clipped.
+    With column contrast on, each part gets the stretch of its own column, so
+    the overlay matches the single panels next to it."""
+    bf = _open_rgb(item["bf"], draft_to)
+    if luts and item.get("bf_col", 0) < len(luts):
+        bf = bf.point(luts[item["bf_col"]])
+    w = max(0.0, min(100.0, float(cfg.overlay_bf_percent))) / 100.0
+    g = bf.convert("L").point(lambda v: int(v * w + 0.5))
+    out = Image.merge("RGB", (g, g, g))
+    colours = [cfg.overlay_color] + [c for c in ("magenta", "cyan", "red", "yellow")
+                                     if c != cfg.overlay_color]
+    for k, fp in enumerate(item["fl"]):
+        fl = _open_rgb(fp, draft_to)
+        cols = item.get("fl_cols", [])
+        if luts and k < len(cols) and cols[k] < len(luts):
+            fl = fl.point(luts[cols[k]])
+        if fl.size != out.size:
+            fl = fl.resize(out.size, Image.BILINEAR)
+        r, gg, b = fl.split()
+        inten = ImageChops.lighter(ImageChops.lighter(r, gg), b)   # signal in any band
+        cr, cg, cb = OVERLAY_COLORS.get(colours[k % len(colours)], (0.0, 1.0, 0.0))
+        tint = Image.merge("RGB", tuple(inten.point(lambda v, f=f: int(v * f + 0.5))
+                                         for f in (cr, cg, cb)))
+        out = ImageChops.add(out, tint)
+    return out
 
 
 def load_bold_font(size, override=None):
@@ -322,6 +460,8 @@ def native_cell_size(paths):
     """Largest (w, h) among a row's images, so detail is preserved."""
     mw = mh = 0
     for p in paths:
+        if isinstance(p, dict):
+            p = p.get("bf") or (p.get("fl") or [None])[0]
         try:
             with Image.open(p) as im:
                 w, h = im.size
@@ -492,20 +632,26 @@ def render(cfg: CollageConfig, scale=1.0, rows=None, progress=None):
             for col_idx, fpath in enumerate(r["images"]):
                 sw = sh = None
                 try:
-                    img = Image.open(fpath)
-                    # Record the TRUE source size before any draft downscale -
-                    # the scale-bar maths is calibrated against the original
-                    # pixel size and would be wrong if taken after drafting.
-                    sw, sh = img.size
-                    if scale < 1.0:
-                        # draft() decodes JPEGs directly at a reduced size,
-                        # which is far cheaper than full decode + resize. It is
-                        # a no-op for formats that do not support it, so this is
-                        # always safe. Only used for previews.
-                        img.draft("RGB", (max(1, cw), max(1, ch)))
-                    img = img.convert("RGB") if img.mode != "RGB" else img
-                    if luts and col_idx < len(luts):
-                        img = img.point(luts[col_idx])
+                    draft_to = (max(1, cw), max(1, ch)) if scale < 1.0 else None
+                    if isinstance(fpath, dict):
+                        # overlay panel: built from the brightfield and the
+                        # fluorescence of this row, same size as the brightfield
+                        with Image.open(fpath["bf"]) as probe:
+                            sw, sh = probe.size
+                        img = make_overlay(fpath, cfg, luts, draft_to)
+                    else:
+                        img = Image.open(fpath)
+                        # Record the TRUE source size before any draft downscale -
+                        # the scale-bar maths is calibrated against the original
+                        # pixel size and would be wrong if taken after drafting.
+                        sw, sh = img.size
+                        if draft_to:
+                            # draft() decodes JPEGs directly at a reduced size;
+                            # a no-op for other formats. Only used for previews.
+                            img.draft("RGB", draft_to)
+                        img = img.convert("RGB") if img.mode != "RGB" else img
+                        if luts and col_idx < len(luts):
+                            img = img.point(luts[col_idx])
                     fitted = (fit_cover(img, cw, ch) if cfg.fit_mode == "cover"
                               else fit_contain(img, cw, ch)).convert("RGBA")
                     if cfg.fit_mode == "contain":

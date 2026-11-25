@@ -18,6 +18,11 @@ Analysis version unchanged (3.1): rule results are identical to before.
   not the old default 2.6428); files written by the analysis (masks,
   overlays) are not used as panels; optional contrast stretch, the same for
   every image of a column; scale-bar label kept inside the image.
+- Collage: a parent folder is enough - the stitched brightfield and
+  fluorescence images are found in it or in `<folder>_stitched` (so the
+  raw-tile folder works too), one row per position. Optional **overlay
+  column** (brightfield + fluorescence, green by default, colour and
+  brightfield level selectable), drawn with Pillow - no Fiji/ImageJ.
 - `Start Collage Builder.bat` (collage alone, e.g. office PC) uses the
   pipeline's `.venv` or conda environment `cargo` when present.
 

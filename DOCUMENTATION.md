@@ -1453,9 +1453,22 @@ python stitch_bzx.py "D:\data\BZX_run" --min-tiles 4 --overlap 30
 `collage_gui.py` + `collage_engine.py` (GUI: **Collage** tab; standalone:
 `Start Collage Builder.bat`, needs only Python and Pillow).
 
-**Input.** A folder whose subfolders are the rows; the images inside a
-subfolder are its columns, in natural name order (`XY01_brightfield.tif`,
-`XY01_fluorescence.tif`, `XY01_overlay.tif`). Files the analysis writes
+**Input.** *Use: auto / stitched / all images.* With *stitched* (and with
+*auto* when such files exist) the rows are positions with
+`<pos>_brightfield.tif` and `<pos>_fluorescence*.tif`, searched up to three
+folder levels deep in the chosen folder or, if there are none, in
+`<folder>_stitched` (the Stitching tab's default output, so the folder with
+the raw tiles can be chosen); analysed data folders use the same names
+(`edited_results`, `masks`, `figures` are not searched). Columns: brightfield,
+the fluorescence channel(s), and optionally an **overlay**: the brightfield in
+grey at *Brightfield under the overlay* (default 60 %) plus the fluorescence
+intensity (the maximum of its colour bands) in the overlay colour (default
+green; further channels magenta, cyan, …), added and clipped at 255. With the
+column contrast on, each part of the overlay gets the stretch of its own
+column, so it matches the single panels. Pillow only, no Fiji. With *all
+images* (and *auto* without stitched files) every subfolder is a row and its
+images, in natural name order, are the columns; a folder of raw BZ-X tiles
+is refused with a hint to stitch first. Files the analysis writes
 (`_cp_masks`, `_brightfield_for_cellpose`, `_classified_overlay`,
 `_cnn_overlay`, `_bbox`) are skipped unless *Skip files written by the
 analysis* is switched off. Row labels: the folder name, typed text, or a

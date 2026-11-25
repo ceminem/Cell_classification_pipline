@@ -181,9 +181,49 @@ class CollageGUI:
         ttk.Entry(r, textvariable=self.folder_var).pack(side="left", fill="x",
                                                         expand=True, padx=(0, 4))
         ttk.Button(r, text="Browse...", command=self._pick_folder).pack(side="left")
-        ttk.Label(box, text="Each subfolder becomes one row; images inside it "
-                            "become the columns.",
-                  foreground="#666").pack(anchor="w", padx=8, pady=(0, 6))
+        r = ttk.Frame(box)
+        r.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Label(r, text="Use:").pack(side="left")
+        self.source_var = tk.StringVar(value="auto")
+        sc = ttk.Combobox(r, textvariable=self.source_var, state="readonly", width=12,
+                          values=list(ce.SOURCE_MODES))
+        sc.pack(side="left", padx=4)
+        sc.bind("<<ComboboxSelected>>", lambda e: self._scan())
+        ToolTip(sc, "auto       - stitched images if there are any, else every image\n"
+                    "             of each subfolder\n"
+                    "stitched   - <position>_brightfield.tif + _fluorescence.tif from\n"
+                    "             the Stitching tab (also in <folder>_stitched, so the\n"
+                    "             folder with the raw tiles works too) or an analysed\n"
+                    "             data folder\n"
+                    "all images - every image of each subfolder is a column")
+        r = ttk.Frame(box)
+        r.pack(fill="x", padx=6, pady=(0, 4))
+        self.overlay_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(r, text="Overlay column in", variable=self.overlay_var,
+                        command=self._scan).pack(side="left", padx=(0, 4))
+        self.ovcol_var = tk.StringVar(value="green")
+        oc = ttk.Combobox(r, textvariable=self.ovcol_var, state="readonly", width=7,
+                          values=list(ce.OVERLAY_COLORS))
+        oc.pack(side="left")
+        oc.bind("<<ComboboxSelected>>", lambda e: self._request_preview())
+        r = ttk.Frame(box)
+        r.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Label(r, text="Brightfield under the overlay:").pack(side="left", padx=(22, 4))
+        self.ovbf_var = tk.StringVar(value="60")
+        e = ttk.Spinbox(r, from_=0, to=100, increment=10, textvariable=self.ovbf_var, width=4,
+                        command=self._request_preview)
+        e.pack(side="left")
+        e.bind("<Return>", lambda ev: self._request_preview())
+        e.bind("<FocusOut>", lambda ev: self._request_preview())
+        ttk.Label(r, text="%").pack(side="left")
+        ToolTip(e, "Brightness of the brightfield under the fluorescence in the\n"
+                   "overlay (100 % = as in its own panel; lower makes the colour\n"
+                   "stand out).")
+        ttk.Label(box, text="Each subfolder becomes one row. Stitched / analysed folders: "
+                            "brightfield, fluorescence and the overlay are the columns; "
+                            "otherwise every image of the subfolder.",
+                  foreground="#666", wraplength=520, justify="left")\
+            .pack(anchor="w", padx=8, pady=(0, 6))
 
         lb = ttk.LabelFrame(f, text="Plate layout  (optional - paste from Excel "
                                     "to label rows automatically)")
@@ -478,7 +518,9 @@ class CollageGUI:
             return
         try:
             cfg = ce.CollageConfig(main_folder=folder,
-                                   exclude_generated=self.skip_generated_var.get())
+                                   exclude_generated=self.skip_generated_var.get(),
+                                   source_mode=self.source_var.get(),
+                                   overlay=self.overlay_var.get())
             self.rows = ce.discover_rows(cfg)
         except (ValueError, FileNotFoundError) as exc:
             ttk.Label(self.row_holder, text=str(exc), foreground="#c00000",
@@ -498,10 +540,17 @@ class CollageGUI:
                     break
             if px:
                 break
+        notes = []
+        first = next((p for r in self.rows for p in r["images"] if isinstance(p, str)), "")
+        stitched_dir = os.path.abspath(folder).rstrip("\\/") + "_stitched"
+        if first and os.path.abspath(first).startswith(stitched_dir + os.sep):
+            notes.append(f"stitched images taken from {os.path.basename(stitched_dir)}")
         if px:
             self.ppum_var.set(f"{px:.4f}")
-            self.info.config(text=f"Calibration read from the images: {px:.4f} px/µm "
-                                  "(Scale bar tab).")
+            notes.append(f"calibration from the images: {px:.4f} px/µm")
+        self._scan_note = " · ".join(notes)
+        if notes:
+            self.info.config(text=self._scan_note[:1].upper() + self._scan_note[1:] + ".")
         self._request_preview()
 
     def open_folder(self, folder, column_contrast=None):
@@ -789,6 +838,10 @@ class CollageGUI:
             scale_bar_color=tuple(self.bar_color_rgb) + (255,),
             scale_bar_label=(self.barlabel_var.get().strip() or None),
             exclude_generated=self.skip_generated_var.get(),
+            source_mode=self.source_var.get(),
+            overlay=self.overlay_var.get(),
+            overlay_color=self.ovcol_var.get(),
+            overlay_bf_percent=float(self._num(self.ovbf_var, 60, False)),
             column_contrast=self.col_contrast_var.get(),
             transparent_background=self.transparent_var.get(),
             output_format=self.fmt_var.get(),
@@ -847,9 +900,10 @@ class CollageGUI:
                     self._redraw()
                     est_w = int(a.width / max(b, 1e-6))
                     est_h = int(a.height / max(b, 1e-6))
+                    note = getattr(self, "_scan_note", "")
                     self.info.config(
                         text=f"Preview at {b*100:.0f}%  -  full size will be about "
-                             f"{est_w} x {est_h} px")
+                             f"{est_w} x {est_h} px" + (f"  ·  {note}" if note else ""))
                 else:
                     self.info.config(text="Preview failed - see message")
                     messagebox.showerror(APP_TITLE, a.splitlines()[-1])

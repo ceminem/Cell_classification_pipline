@@ -163,8 +163,13 @@ Panels for a paper: one row per sample, its images as columns (brightfield,
 fluorescence, merge), row labels, column headers and a calibrated scale bar.
 
 1. Fastest: **Stitching** tab → *Collage >*, or **Run** tab → *Collage of
-   these samples*. Or on the **Collage** tab *Browse…* a folder whose
-   subfolders (XY01, A1, …) hold the images.
+   these samples*. Or on the **Collage** tab *Browse…* the parent folder:
+   with *Use: auto* the stitched images are found by themselves - in the
+   folder, or in `<folder>_stitched` when you choose the folder with the raw
+   BZ-X tiles. Every position becomes a row with **brightfield,
+   fluorescence and an overlay** (*Overlay column in* green by default; the
+   brightfield under it at 60 %). Other folders: every image of a subfolder
+   is a column.
 2. Row labels: type them, or *From Sample names tab* to use the plate layout
    pasted there.
 3. **Layout** tab → *Same contrast stretch for each column*: makes dim
