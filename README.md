@@ -14,6 +14,9 @@ released → per-well percentages → figures with honest statistics.**
 * **Cell count** for brightfield-only images: Cellpose segmentation, counts
   (incl. an unbiased counting frame for cells per mm²) and paper figures with
   vector cell outlines (`cell_count.py`, *Cell count* tab).
+* **Collage** of figure panels (rows = samples, columns = channels) with
+  calibrated scale bars and one contrast setting per column
+  (`collage_gui.py`, *Collage* tab, or `Start Collage Builder.bat` alone).
 * **Stitching** of Keyence BZ-X tiles (e.g. 4 x 4 per position) into one
   brightfield and one fluorescence image per position, seamless, with
   incomplete positions skipped and flagged (`stitch_bzx.py`, *Stitching* tab).

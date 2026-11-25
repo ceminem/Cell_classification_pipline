@@ -36,6 +36,7 @@ the next student taking the project over.
 15. [Glossary](#15-glossary)
 16. [Cell counting from brightfield images](#16-cell-counting-from-brightfield-images)
 17. [Stitching BZ-X tiles](#17-stitching-bz-x-tiles)
+18. [Figure collage](#18-figure-collage)
 
 ---
 
@@ -1154,6 +1155,11 @@ unusable. Data stays on the lab drive; the run record links data and code.
 | `Cargo Analysis.bat` | Windows launcher: finds conda, picks the best (GPU) environment, starts the GUI |
 | `cargo_gui.py` | the window: Run, Stitching, Cell count, Sample names, Settings, Figures, CNN, Setup check (incl. update button) |
 | `stitch_bzx.py` | stitches BZ-X tiles per position (registration, blending, `.gci` reader); CLI |
+| `collage_gui.py` | Collage tab (also standalone: `Start Collage Builder.bat`) |
+| `collage_engine.py` | collage layout, scale bar, column contrast, output formats |
+| `overlay_editor.py` | two-image colour overlay with live contrast / gamma / colour |
+| `scalebar_tool.py` | scale bar burned onto a single image |
+| `fiji_merge.py` | optional: the overlay through Fiji's Merge Channels |
 | `cell_count.py` | brightfield-only cell counting, figures, Excel; CLI |
 | `run_cargo_pipeline.py` | orchestrator: channel search, brightfield prep, Cellpose, measurement, batch summary, run record; CLI |
 | `cargo_measure.py` | per-cell measurement, classification rule, Otsu, CSV and overlay writing |
@@ -1439,3 +1445,48 @@ python stitch_bzx.py "D:\data\BZX_run" --min-tiles 4 --overlap 30
     [--output DIR] [--flat-field] [--no-flat-field-bf] [--overlay]
     [--search 12] [--min-ncc 0.15] [--nm-per-px 754.88] [--workers N] [--force]
 ```
+
+---
+
+## 18. Figure collage
+
+`collage_gui.py` + `collage_engine.py` (GUI: **Collage** tab; standalone:
+`Start Collage Builder.bat`, needs only Python and Pillow).
+
+**Input.** A folder whose subfolders are the rows; the images inside a
+subfolder are its columns, in natural name order (`XY01_brightfield.tif`,
+`XY01_fluorescence.tif`, `XY01_overlay.tif`). Files the analysis writes
+(`_cp_masks`, `_brightfield_for_cellpose`, `_classified_overlay`,
+`_cnn_overlay`, `_bbox`) are skipped unless *Skip files written by the
+analysis* is switched off. Row labels: the folder name, typed text, or a
+plate layout (pasted, or *From Sample names tab*; matched on the well id in
+the folder name, `cargo_labels.parse_mask`).
+
+**Layout.** Rows can be split into blocks side by side; cells take the
+native image size ("auto") or a fixed size; *cover* crops to fill, *contain*
+never crops.
+
+**Contrast (optional).** *Same contrast stretch for each column*: for every
+column the 0.1th and 99.8th percentile of each colour band over ALL its images
+(read from reduced copies) define one linear stretch, applied identically to
+every row. Relative brightness between conditions is therefore preserved; a
+per-image stretch would not preserve it and is deliberately not offered. Only
+the figure changes, never the image files.
+
+**Scale bar.** Length in pixels = length (µm) × calibration (px/µm) × the
+display scale of the cell (resize factor of *cover* / *contain*), so the bar
+stays right after resizing and cropping. The calibration is read from the
+first TIFF that carries one (pixels per cm, as written by `stitch_bzx.py`,
+or ImageJ metadata in microns); 72-dpi defaults (BZ-X stitched files) are
+ignored and the typed value is used. The bar label is kept inside the cell.
+
+**Output.** PNG / WEBP (transparent background possible), TIFF (LZW) /
+JPEG (flattened onto white), with the chosen DPI. *Batch* writes one figure
+per subfolder of a chosen folder.
+
+**Single panels.** *Overlay 2 images…* (`overlay_editor.py`): two channels,
+each with black/white point, brightness, gamma and colour, combined
+additively; saved directly or, optionally, through Fiji's Merge Channels
+(`fiji_merge.py`). *Scale bar (1 image)…* (`scalebar_tool.py`): burns a bar
+onto one image without resizing it.
+

@@ -157,6 +157,32 @@ reused. Tick *segment again* after changing Cellpose settings.
 
 ---
 
+## Part 3c — Figure collage (Collage tab)
+
+Panels for a paper: one row per sample, its images as columns (brightfield,
+fluorescence, merge), row labels, column headers and a calibrated scale bar.
+
+1. Fastest: **Stitching** tab → *Collage >*, or **Run** tab → *Collage of
+   these samples*. Or on the **Collage** tab *Browse…* a folder whose
+   subfolders (XY01, A1, …) hold the images.
+2. Row labels: type them, or *From Sample names tab* to use the plate layout
+   pasted there.
+3. **Layout** tab → *Same contrast stretch for each column*: makes dim
+   fluorescence visible with ONE setting per column, so conditions stay
+   comparable (the hand-over buttons switch it on). Files written by the
+   analysis (masks, overlays) are skipped.
+4. **Scale bar** tab: the calibration is read from the images (stitched files:
+   1.3247 px/µm); choose the length (100 µm reads well on a stitched field)
+   and a label such as `100 µm`.
+5. **Output** → *Save figure…* (PNG/TIFF/JPEG/WEBP, DPI), or *Batch* for one
+   figure per subfolder. *Overlay 2 images…* and *Scale bar (1 image)…* on the
+   Source tab make single panels.
+
+Without the rest of the pipeline (an office PC): `Start Collage Builder.bat`
+opens the same builder on its own; it only needs Python and Pillow.
+
+---
+
 ## Part 4 — The CNN, step by step (CNN tab)
 
 The line at the top must say **Compute device: GPU – AMD Radeon RX 7800 XT

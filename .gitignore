@@ -53,3 +53,6 @@ cellcount_settings.json
 
 # Stitching tab: last used folders and options (machine-specific)
 stitch_settings.json
+
+# Collage builder: last settings (machine-specific)
+collage_gui_settings.json

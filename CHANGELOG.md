@@ -4,9 +4,22 @@ All notable changes, newest first. "Analysis version" changes alter the numbers
 a run produces; results from different analysis versions are not comparable.
 Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 
-## [Unreleased] — 2026-11-19
+## [Unreleased] — 2026-11-25
 
 Analysis version unchanged (3.1): rule results are identical to before.
+
+### Added
+- **Collage tab**: the collage builder (`collage_gui.py`, `collage_engine.py`,
+  `overlay_editor.py`, `scalebar_tool.py`, `fiji_merge.py`) is part of the
+  pipeline window. *Collage >* on the Stitching tab and *Collage of these
+  samples* on the Run tab open their folders in it; *From Sample names tab*
+  labels the rows with the plate layout pasted there.
+- Collage: calibration read from the images (stitched files: 1.3247 px/µm,
+  not the old default 2.6428); files written by the analysis (masks,
+  overlays) are not used as panels; optional contrast stretch, the same for
+  every image of a column; scale-bar label kept inside the image.
+- `Start Collage Builder.bat` (collage alone, e.g. office PC) uses the
+  pipeline's `.venv` or conda environment `cargo` when present.
 
 ### Changed
 - **Classified images** (`_classified_overlay.png`, `_cnn_overlay.png`) are

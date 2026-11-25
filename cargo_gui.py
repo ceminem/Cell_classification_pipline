@@ -194,6 +194,7 @@ class CargoGUI:
         self.tab_settings = ttk.Frame(nb)
         self.tab_labels = ttk.Frame(nb)
         self.tab_plot = ttk.Frame(nb)
+        self.tab_collage = ttk.Frame(nb)
         self.tab_cnn = ttk.Frame(nb)
         self.tab_setup = ttk.Frame(nb)
         nb.add(self.tab_run, text="  Run  ")
@@ -202,6 +203,7 @@ class CargoGUI:
         nb.add(self.tab_labels, text="  Sample names  ")
         nb.add(self.tab_settings, text="  Settings  ")
         nb.add(self.tab_plot, text="  Figures  ")
+        nb.add(self.tab_collage, text="  Collage  ")
         nb.add(self.tab_cnn, text="  CNN  ")
         nb.add(self.tab_setup, text="  Setup check  ")
 
@@ -211,6 +213,7 @@ class CargoGUI:
         self._build_settings_tab()
         self._build_labels_tab()
         self._build_plot_tab()
+        self._build_collage_tab()
         self._build_cnn_tab()
         self._build_setup_tab()
 
@@ -303,6 +306,9 @@ class CargoGUI:
                    command=self._open_results).pack(side="right")
         ttk.Button(bottom, text="Show classified images",
                    command=self._show_overlays).pack(side="right", padx=6)
+        ttk.Button(bottom, text="Collage of these samples",
+                   command=lambda: self._to_collage(self.parent_var.get().strip()))\
+            .pack(side="right")
 
     def _build_settings_tab(self):
         f = self.tab_settings
@@ -573,6 +579,33 @@ class CargoGUI:
         c.delete("all")
         for i, col in enumerate(cp.bar_colors(self.p_pal.get(), 12)):
             c.create_rectangle(i * 18 + 1, 2, i * 18 + 15, 15, fill=col, outline="#555")
+
+    # ============================================================ collage ===
+    def _build_collage_tab(self):
+        """The collage builder (collage_gui.py) inside this window."""
+        self.collage = None
+        try:
+            import collage_gui
+            self.collage = collage_gui.CollageGUI(
+                self.root, parent=self.tab_collage,
+                get_mask_text=lambda: (self.lbl_text.get("1.0", "end")
+                                       if hasattr(self, "lbl_text") else ""))
+        except Exception as exc:
+            ttk.Label(self.tab_collage, foreground="#c00000", justify="left",
+                      text=f"The collage builder could not be loaded:\n{exc}\n\n"
+                           "collage_gui.py and collage_engine.py must be in the "
+                           "program folder.").pack(anchor="w", padx=14, pady=14)
+
+    def _to_collage(self, folder, contrast=True):
+        if self.collage is None:
+            messagebox.showinfo(APP_TITLE, "The collage builder is not available "
+                                           "(see the Collage tab).")
+            return
+        if not folder or not os.path.isdir(folder):
+            messagebox.showinfo(APP_TITLE, "That folder does not exist yet.")
+            return
+        self.nb.select(self.tab_collage)
+        self.collage.open_folder(folder, column_contrast=contrast)
 
     def _bind_plot_wheel(self, area):
         """Mouse wheel over the Figures controls scrolls them; over the sample
@@ -2180,6 +2213,11 @@ class CargoGUI:
         self.st_use_btn = ttk.Button(r, text="Analyse these on the Run tab  >",
                                      command=self._st_use)
         self.st_use_btn.pack(side="left", padx=6)
+        b = ttk.Button(r, text="Collage  >", command=lambda: self._to_collage(self._st_outdir()))
+        b.pack(side="left")
+        ToolTip(b, "Opens the stitched images in the Collage tab: one row per\n"
+                   "position, brightfield and fluorescence as columns, scale bar\n"
+                   "calibrated from the files.")
         self.st_status = ttk.Label(r, text="", foreground="#666")
         self.st_status.pack(side="right")
 
@@ -2834,6 +2872,10 @@ class CargoGUI:
         for name, why in (("cargo_labels", "Sample names tab"),
                           ("cargo_plot", "Figures tab"),
                           ("cargo_measure", "measurement"),
+                          ("collage_engine", "Collage tab"),
+                          ("collage_gui", "Collage tab"),
+                          ("overlay_editor", "Collage: overlay of 2 images"),
+                          ("scalebar_tool", "Collage: scale bar on 1 image"),
                           ("matplotlib", "plotting")):
             try:
                 mod = importlib.import_module(name)
