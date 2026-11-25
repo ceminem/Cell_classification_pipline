@@ -8,6 +8,18 @@ Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 
 Analysis version unchanged (3.1): rule results are identical to before.
 
+### Changed
+- **Stitching: tile grid removed.** Tiles are evened out with a model fitted
+  in the overlaps: vignetting (polynomial, may be off centre), brightness
+  factor per tile, and for fluorescence bleaching of spots earlier tiles had
+  already lit (acquisition order). The sample cancels out, so it works on
+  dim, sparse fluorescence where the old median-of-tiles estimate was off by
+  ~40 %. Now ON by default for fluorescence too (`--no-flat-field` = as
+  recorded); amounts per position in the log and report. Simulated tiles:
+  deviation from truth 9-16 % before, 4.1-5.1 % after (noise floor 4.0 %).
+  Fluorescence intensities of re-stitched images change (the darker tile
+  edges are corrected).
+
 ### Added
 - **Collage tab**: the collage builder (`collage_gui.py`, `collage_engine.py`,
   `overlay_editor.py`, `scalebar_tool.py`, `fiji_merge.py`) is part of the

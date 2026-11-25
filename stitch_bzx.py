@@ -20,10 +20,12 @@ What it does, for every XY position found below the parent folder:
      of all positions. Unreliable pairs fall back to the nominal step. The
      positions are found on the BRIGHTFIELD (structure everywhere) and used for
      every channel, so brightfield and fluorescence stay pixel-aligned.
-  4. blends the overlaps with linear feathering (no seams). Vignetting
-     (darker tile edges) is corrected for the BRIGHTFIELD by default - it only
-     evens the background for segmentation - and optionally for fluorescence
-     (OFF by default, so intensities stay as recorded, like BZ-X output).
+  4. evens out every channel before blending (estimate_shading): vignetting
+     (darker tile edges), brightness differences between tiles and, for
+     fluorescence, bleaching of spots that earlier tiles had already lit - all
+     measured where tiles overlap, so the sample itself cancels out. Then the
+     overlaps are blended with linear feathering. --no-flat-field leaves the
+     fluorescence as recorded (tile pattern like BZ-X output).
   5. writes, per position, into the output folder:
         XY01/XY01_brightfield.tif      RGB 8-bit, grey (like BZ-X output)
         XY01/XY01_fluorescence.tif     RGB 8-bit, in its pseudo colour
@@ -419,6 +421,232 @@ def flat_field(tiles):
     return st / top
 
 
+def _shade_terms(y, x, H, W):
+    """Smooth vignetting model: log F = full polynomial up to degree 4 in
+    centred coordinates (14 terms; odd and mixed terms let the optical axis sit
+    off the image centre)."""
+    u = (np.asarray(x, np.float64) - W / 2.0) / (W / 2.0)
+    v = (np.asarray(y, np.float64) - H / 2.0) / (H / 2.0)
+    return np.stack([u ** a * v ** b for d in range(1, 5) for a in range(d, -1, -1)
+                     for b in (d - a,)], -1)
+
+
+def prior_exposures(pos, order, shape):
+    """For every tile: a map of how often each of its pixels had already been
+    in the field of earlier tiles (acquisition order = tile number)."""
+    H, W = shape
+    rank = {t: k for k, t in enumerate(order)}
+    out = {}
+    for t in order:
+        n = np.zeros((H, W), np.float32)
+        yt, xt = pos[t]
+        for e in order[:rank[t]]:
+            ye, xe = pos[e]
+            y0, y1 = max(yt, ye), min(yt, ye) + H
+            x0, x1 = max(xt, xe), min(xt, xe) + W
+            if y1 > y0 and x1 > x0:
+                n[y0 - yt:y1 - yt, x0 - xt:x1 - xt] += 1
+        out[t] = n
+    return out
+
+
+def estimate_shading(tiles, pos, shape, pairs, order=None, block=24, fit_offset=True):
+    """Camera offset, vignetting, tile brightness and (with `order`) bleaching,
+    all from the overlaps.
+
+    Model of a recorded pixel:  I = D + F(p) * g_tile * b^n(p) * S
+      D  constant offset (camera dark level, rounding) - additive
+      F  smooth vignetting profile of the field (polynomial in log)
+      g  brightness of each tile (exposure, lamp)
+      b  remaining fraction per earlier exposure, n(p) how often the spot had
+         already been lit by earlier tiles (acquisition order = tile number)
+      S  the sample.
+    The same spot is seen by two tiles at different places of their field, so
+    for every block of every overlap the sample cancels:
+        log(I_i - D) - log(I_j - D) = logF(p_i) - logF(p_j) + log g_i - log g_j
+                                      + (n_i - n_j) log b
+    which is linear for a given D; D is chosen as the value with the smallest
+    residual (a wrong D leaves a tile pattern, because dividing by F amplifies
+    an offset towards the tile edges). Works on sparse, uneven and dim samples,
+    unlike a median over tiles. Weighted least squares, mean log g = 0, a
+    little ridge on F, blocks off by more than 3 MAD dropped (moving cells,
+    debris).
+
+    Returns dict(F, gains, bleach, offset, blocks) or None if overlaps are too
+    few. Correct a tile with  (t - D) / F * g / b^n + D."""
+    H, W = shape
+    ids = sorted(tiles)
+    idx = {t: k for k, t in enumerate(ids)}
+    nb = 14
+    use_b = order is not None and len(order) > 1
+    nprior = prior_exposures(pos, order, shape) if use_b else None
+    rows, mas, mbs, wts = [], [], [], []
+    for i, j in pairs:
+        if i not in tiles or j not in tiles:
+            continue
+        (yi, xi), (yj, xj) = pos[i], pos[j]
+        y0, y1 = max(yi, yj), min(yi, yj) + H
+        x0, x1 = max(xi, xj), min(xi, xj) + W
+        if y1 - y0 < block or x1 - x0 < block:
+            continue
+        a = tiles[i][y0 - yi:y1 - yi, x0 - xi:x1 - xi]
+        b = tiles[j][y0 - yj:y1 - yj, x0 - xj:x1 - xj]
+        cut = float(np.percentile(np.concatenate([a.ravel(), b.ravel()]), 85))
+        for by in range(0, a.shape[0] - block + 1, block):
+            for bx in range(0, a.shape[1] - block + 1, block):
+                A = a[by:by + block, bx:bx + block]
+                B = b[by:by + block, bx:bx + block]
+                sel = (A <= cut) & (B <= cut)
+                if sel.sum() < block * block * 0.5:
+                    continue
+                gy, gx = y0 + by + block / 2.0, x0 + bx + block / 2.0
+                row = np.zeros(nb + 1 + len(ids))
+                row[:nb] = (_shade_terms(gy - yi, gx - xi, H, W)
+                            - _shade_terms(gy - yj, gx - xj, H, W))
+                if use_b:
+                    row[nb] = (nprior[i][int(gy) - yi, int(gx) - xi]
+                               - nprior[j][int(gy) - yj, int(gx) - xj])
+                row[nb + 1 + idx[i]] = 1.0
+                row[nb + 1 + idx[j]] = -1.0
+                rows.append(row)
+                mas.append(float(A[sel].mean()))
+                mbs.append(float(B[sel].mean()))
+                wts.append(np.sqrt(sel.sum()))
+    if len(rows) < 30:
+        return None
+    A = np.array(rows)
+    ma, mb, w = np.array(mas), np.array(mbs), np.array(wts)
+    nu = nb + 1 + len(ids)
+    # constraints on the tile factors: mean 0, and NO linear trend across the
+    # mosaic. Without the latter a tilt of the vignetting (optical axis off the
+    # image centre) cannot be told from tiles getting steadily brighter to one
+    # side - both change every overlap ratio the same way - and the tilt ended
+    # up in the tile factors (test: 0.77-1.31 instead of 0.88-1.12).
+    cons = np.zeros((3, nu))
+    cons[0, nb + 1:] = 1.0
+    py = np.array([pos[t][0] for t in ids], np.float64)
+    px = np.array([pos[t][1] for t in ids], np.float64)
+    for r_, c_ in ((1, px), (2, py)):
+        c_ = c_ - c_.mean()
+        if np.abs(c_).max() > 0:
+            cons[r_, nb + 1:] = c_ / np.abs(c_).max()
+    ridge = np.zeros((nb, nu))
+    ridge[:, :nb] = np.eye(nb) * 0.05
+    if not use_b:
+        ridge = np.vstack([ridge, np.eye(1, nu, nb) * 10.0])       # pin log b = 0
+
+    def solve(D):
+        ok = (ma - D > 0.3) & (mb - D > 0.3)
+        if ok.sum() < 30:
+            return None
+        y = np.log((ma - D) / (mb - D))
+        keep = ok.copy()
+        sol = np.zeros(nu)
+        for _ in range(3):
+            M = np.vstack([A[keep] * w[keep, None], cons * w.max() * 10, ridge * w.max()])
+            Y = np.concatenate([y[keep] * w[keep], np.zeros(3), np.zeros(ridge.shape[0])])
+            sol = np.linalg.lstsq(M, Y, rcond=None)[0]
+            res = A @ sol - y
+            mad = np.median(np.abs(res[keep])) * 1.4826 + 1e-6
+            new = ok & (np.abs(res) < 3 * mad)
+            if new.sum() < 30 or (new == keep).all():
+                break
+            keep = new
+        # score on the blocks every D can use, so scores are comparable
+        res = (A @ sol - y)[base_ok]
+        return sol, float(np.sqrt(np.average(np.minimum(res ** 2, (3 * mad) ** 2),
+                                              weights=w[base_ok]))), int(keep.sum())
+
+    lo = float(np.percentile(np.minimum(ma, mb), 2))
+    base_ok = (np.minimum(ma, mb) > lo)
+    if fit_offset:
+        # offsets from clearly negative (rounding down) to 60 % of the dimmest
+        # background; coarse grid, then refined around the best
+        cands = list(np.linspace(-0.25 * lo - 1.0, 0.6 * lo, 25))
+        best = None
+        for D in cands:
+            r = solve(D)
+            if r and (best is None or r[1] < best[1]):
+                best = (r[0], r[1], r[2], D)
+        if best is None:
+            return None
+        step = cands[1] - cands[0]
+        for D in np.linspace(best[3] - step, best[3] + step, 9):
+            r = solve(D)
+            if r and r[1] < best[1]:
+                best = (r[0], r[1], r[2], D)
+        sol, _score, nkeep, D = best
+    else:
+        r = solve(0.0)
+        if r is None:
+            return None
+        sol, _score, nkeep = r
+        D = 0.0
+    yy, xx = np.mgrid[0:H, 0:W]
+    F = np.exp(_shade_terms(yy, xx, H, W) @ sol[:nb])
+    F = F / float(np.percentile(F, 99.5))
+    F = np.maximum(F, 0.05)
+    bleach = float(np.clip(np.exp(sol[nb]), 0.3, 1.0)) if use_b else 1.0
+    gains = {t: float(np.clip(np.exp(-sol[nb + 1 + idx[t]]), 0.5, 2.0)) for t in ids}
+    return {"F": F, "gains": gains, "bleach": bleach, "offset": float(D), "blocks": nkeep}
+
+
+def tile_gains(tiles, pos, shape, pairs, max_iter=2):
+    """One brightness factor per tile so that overlapping tiles agree.
+
+    For every neighbour pair the overlap is cut from both tiles and the ratio
+    of their trimmed means taken (pixels above the 85th percentile of the pair
+    left out, so the few bright cells do not count; a mean rather than a
+    median because dim 8-bit fluorescence has only a few grey levels and its
+    median jumps in steps of 20-30 %). The log
+    factors are solved by least squares over all pairs, with their mean fixed
+    at 0, so the mosaic keeps its overall brightness and only the tile-to-tile
+    steps (exposure, lamp, bleaching of later tiles) are removed. Pairs whose
+    ratio disagrees with the solution by > 15 % are dropped once."""
+    H, W = shape
+    ids = sorted(tiles)
+    index = {t: k for k, t in enumerate(ids)}
+    eqs = []
+    for i, j in pairs:
+        if i not in tiles or j not in tiles:
+            continue
+        (yi, xi), (yj, xj) = pos[i], pos[j]
+        y0, y1 = max(yi, yj), min(yi, yj) + H
+        x0, x1 = max(xi, xj), min(xi, xj) + W
+        if y1 - y0 < 8 or x1 - x0 < 8:
+            continue
+        # stay off the outermost rows/cols, where registration error matters most
+        my, mx = (y1 - y0) // 8, (x1 - x0) // 8
+        a = tiles[i][y0 - yi + my:y1 - yi - my, x0 - xi + mx:x1 - xi - mx]
+        b = tiles[j][y0 - yj + my:y1 - yj - my, x0 - xj + mx:x1 - xj - mx]
+        cut = float(np.percentile(np.concatenate([a.ravel(), b.ravel()]), 85))
+        sel = (a <= cut) & (b <= cut)
+        if sel.sum() < 100:
+            continue
+        ma, mb = float(a[sel].mean()), float(b[sel].mean())
+        if ma < 0.5 or mb < 0.5:
+            continue
+        eqs.append((index[i], index[j], np.log(mb / ma)))   # log g_i - log g_j
+    if not eqs:
+        return {t: 1.0 for t in ids}
+    keep = list(range(len(eqs)))
+    for _ in range(max_iter):
+        A = np.zeros((len(keep) + 1, len(ids)))
+        y = np.zeros(len(keep) + 1)
+        for r, e in enumerate(keep):
+            i, j, d = eqs[e]
+            A[r, i], A[r, j], y[r] = 1.0, -1.0, d
+        A[-1, :] = 1.0                                         # mean log gain = 0
+        lg = np.linalg.lstsq(A, y, rcond=None)[0]
+        resid = [abs(lg[eqs[e][0]] - lg[eqs[e][1]] - eqs[e][2]) for e in keep]
+        bad = [e for e, rr in zip(keep, resid) if rr > np.log(1.15)]
+        if not bad or len(keep) - len(bad) < len(ids) - 1:
+            break
+        keep = [e for e in keep if e not in bad]
+    lg = np.clip(lg, np.log(0.5), np.log(2.0))
+    return {t: float(np.exp(lg[index[t]])) for t in ids}
+
+
 def compose(tiles, pos, shape, ramp, trim, rows_cols):
     H, W = shape
     ys = [p[0] for p in pos.values()]
@@ -554,8 +782,48 @@ def stitch_group(g, opt):
             tiles[i] = img
             color = color or col
         if opt.flat_field_bf if roles[ch]["bf"] else opt.flat_field:
-            ff = flat_field(list(tiles.values()))
-            tiles = {i: t / ff for i, t in tiles.items()}
+            # vignetting, tile brightness and (fluorescence) bleaching, measured
+            # in the overlaps - see estimate_shading
+            fl_ch = not roles[ch]["bf"]
+            order = sorted(tiles) if (fl_ch and opt.bleach) else None
+            est = estimate_shading(tiles, pos, (H, W), list(offsets), order=order,
+                                   fit_offset=opt.fit_offset)
+            if est is not None and (est["bleach"] < 0.8 or float(est["F"].min()) < 0.3):
+                # implausible (> 20 % loss per exposure or > 70 % vignetting):
+                # more likely moving debris or very few usable overlaps - retry
+                # without bleaching, and keep the result only if it is sane
+                est = estimate_shading(tiles, pos, (H, W), list(offsets), order=None,
+                                       fit_offset=False)
+                if est is not None and float(est["F"].min()) < 0.3:
+                    est = None
+                rep["note"] = (rep["note"] + "; " if rep["note"] else "") + \
+                    f"{ch}: unusual shading estimate - bleaching not corrected, check the seams"
+            if est is None:                          # too little overlap: old way
+                ff = flat_field(list(tiles.values()))
+                tiles = {i: t / ff for i, t in tiles.items()}
+                shade_note = "vignetting from the tile median (few overlaps)"
+            else:
+                ff, gains, bleach, D = est["F"], est["gains"], est["bleach"], est["offset"]
+                if not opt.tile_gain:
+                    gains = {i: 1.0 for i in tiles}
+                nprior = (prior_exposures(pos, order, (H, W))
+                          if (order and bleach < 0.995) else None)
+                out = {}
+                for i, t in tiles.items():
+                    c = (t - D) / ff * gains[i]
+                    if nprior is not None:
+                        # undo the dimming of spots that earlier tiles had already lit
+                        c = c / np.power(bleach, nprior[i])
+                    out[i] = c + D
+                tiles = out
+                shade_note = (f"vignetting {100 * (1 - float(ff.min())):.0f} % at the corners, "
+                              f"tiles x{min(gains.values()):.2f}-{max(gains.values()):.2f}"
+                              + (f", bleaching {100 * (1 - bleach):.1f} % per exposure"
+                                 if fl_ch and order else "")
+                              + (f", offset {D:.1f}" if opt.fit_offset else ""))
+            rep.setdefault("_shading", {})[ch] = shade_note
+            if fl_ch:
+                rep["note"] = (rep["note"] + "; " if rep["note"] else "") + f"{ch}: {shade_note}"
         img = compose(tiles, pos, (H, W), ramp=max(8, int(min(H, W) * opt.overlap / 2)),
                       trim=opt.trim, rows_cols=(grid, R, C))
         img8 = np.clip(np.round(img), 0, 255).astype(np.uint8)
@@ -613,9 +881,21 @@ def main(argv=None):
                     help="search range around the nominal position, %% of a tile")
     ap.add_argument("--min-ncc", type=float, default=0.15,
                     help="minimum correlation for a measured overlap to be trusted")
-    ap.add_argument("--flat-field", action="store_true",
-                    help="correct vignetting of the FLUORESCENCE (changes intensities near "
-                         "tile edges; off = like BZ-X)")
+    ap.add_argument("--flat-field", dest="flat_field", action="store_true", default=True,
+                    help="even out the FLUORESCENCE: vignetting, tile brightness and "
+                         "bleaching, measured in the overlaps (default ON)")
+    ap.add_argument("--no-flat-field", dest="flat_field", action="store_false",
+                    help="leave the fluorescence as recorded (tile pattern stays, like "
+                         "images stitched by the BZ-X software)")
+    ap.add_argument("--fit-offset", dest="fit_offset", action="store_true",
+                    help="also fit a constant camera offset (experimental; off: in tests "
+                         "it traded off against the vignetting without improving seams)")
+    ap.add_argument("--no-bleach", dest="bleach", action="store_false",
+                    help="with fluorescence correction: do not model bleaching of spots "
+                         "that earlier tiles had already illuminated")
+    ap.add_argument("--no-tile-gain", dest="tile_gain", action="store_false",
+                    help="with vignetting correction: do not even out the brightness "
+                         "between tiles (measured in the overlaps)")
     ap.add_argument("--no-flat-field-bf", dest="flat_field_bf", action="store_false",
                     help="do not correct vignetting of the brightfield (on by default: it "
                          "only evens the background for segmentation)")
@@ -661,9 +941,10 @@ def main(argv=None):
     print(f"Output   : {opt.output}")
     print(f"Positions: {len(groups)} found, {len(todo)} to stitch "
           f"(min. {opt.min_tiles} tiles, overlap {opt.overlap * 100:g} %"
-          + (", vignetting corrected: brightfield" if opt.flat_field_bf else "")
-          + (" + fluorescence" if opt.flat_field and opt.flat_field_bf else
-             ", vignetting corrected: fluorescence" if opt.flat_field else "") + ")")
+          + (", tiles evened out: " + " + ".join(
+              n for n, on in (("brightfield", opt.flat_field_bf),
+                              ("fluorescence", opt.flat_field)) if on)
+             if (opt.flat_field_bf or opt.flat_field) else "") + ")")
     print()
 
     workers = opt.workers or max(1, (os.cpu_count() or 2) - 1)

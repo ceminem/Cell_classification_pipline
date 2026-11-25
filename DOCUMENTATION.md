@@ -1402,15 +1402,59 @@ change intensities where only one tile contributes. The mosaic is then
 trimmed to the rectangle covered completely (no black corners; `--no-trim`
 keeps everything).
 
-**Vignetting.** Tiles are darker at their edges. For the **brightfield** this
-is corrected by default: the illumination profile is the median of all
-smoothed tiles (σ = 25 px), normalised to its 99th percentile, and each tile
-is divided by it. The brightfield only serves segmentation, so this cannot
-change a measured value; it removes the grid pattern that could otherwise
-confuse Cellpose. For **fluorescence** it is OFF by default (intensities
-stay as recorded, as in images stitched by the BZ-X software, so the
-classification thresholds remain valid); `--flat-field` / the tick box turns
-it on (changes intensities near tile edges by up to ~25 %).
+**Evening out the tiles** (`estimate_shading`; brightfield and, by default,
+fluorescence). Three effects make tiles disagree in their overlaps and leave
+a grid in the mosaic: *vignetting* (each tile darker towards its edges, here
+~30 %), *brightness steps between tiles* (exposure, lamp) and, in
+fluorescence, *bleaching* (a later tile sees its overlap with earlier tiles
+after that spot was already lit). Model of a recorded pixel:
+
+$$I = F(p)\; g_{tile}\; b^{\,n(p)}\; S$$
+
+F = smooth vignetting profile (log F a full polynomial up to degree 4 in the
+tile coordinates, so the optical axis may be off centre), g = factor of the
+tile, b = remaining fraction per earlier exposure, n(p) = how often the spot
+had been in the field of earlier tiles (acquisition order = tile number),
+S = the sample. The same spot is seen by two tiles at different places of
+their field, so in every overlap the sample cancels:
+
+$$\log I_i - \log I_j = \log F(p_i) - \log F(p_j) + \log g_i - \log g_j
+  + (n_i - n_j)\log b$$
+
+Each overlap is split into 24 × 24 px blocks; per block the trimmed mean of
+both tiles (pixels above the pair's 85th percentile left out, so cells do not
+count; a mean because dim 8-bit fluorescence has only a few grey levels).
+All blocks of all overlaps give one weighted least-squares system, with the
+tile factors constrained to mean 1 and to *no linear trend across the
+mosaic* - otherwise a tilt of the vignetting could not be told from tiles
+getting brighter to one side - plus a little ridge on F; blocks off by more
+than 3 MAD are dropped (moving cells, debris). Each tile is then corrected
+as I / F · g / b^n(p) before blending. The estimates are written to the log
+and `stitch_report.csv` per position, e.g. *CH2: vignetting 31 % at the
+corners, tiles ×0.89–1.12, bleaching 4.9 % per exposure*. Estimates outside
+plausible limits (> 20 % bleaching per exposure, > 70 % vignetting) are
+retried without bleaching and flagged. Too few overlaps: the older estimate
+(median of smoothed tiles) is used.
+
+Why not the median of all tiles (the previous method): on sparse, uneven,
+dim samples the median of 16 tiles still contains sample structure; in tests
+it was off by 41-44 % from the true vignetting, the overlap method by 1-2 %.
+
+Validation (simulated 4 × 4 tiles of 640 × 480 px, 30 % overlap, cut from
+cells of a BZ-X fluorescence image on an even background, with vignetting,
+tile factors 0.88-1.12, bleaching and noise): deviation of the stitched image
+from the truth (CV after 12 px smoothing) 9-16 % without correction, 4.1-5.1 %
+with it, against 4.0 % from noise and 8-bit rounding alone. Remaining: faint
+outlines inside the tiles where the vignetting of the tile centre (covered by
+no overlap) is extrapolated. Not removable by any stitching: bleaching that
+happened before the recording (e.g. focusing in fluorescence leaves a darker
+field), and real unevenness of the sample (out-of-focus haze).
+
+`--no-flat-field` leaves the fluorescence as recorded (tile pattern stays, as
+in images stitched by the BZ-X software); `--no-bleach`, `--no-tile-gain`
+switch parts off; `--fit-offset` additionally fits a camera offset
+(experimental: in tests it traded off against the vignetting without
+improving the seams).
 
 ### 17.3 Output
 

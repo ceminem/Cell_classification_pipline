@@ -2181,20 +2181,22 @@ class CargoGUI:
                    "image content within +-12 % of a tile around it.")
         r = ttk.Frame(b2)
         r.pack(fill="x", padx=6, pady=(0, 6))
-        ttk.Label(r, text="Correct vignetting:").pack(side="left")
+        ttk.Label(r, text="Even out tiles:").pack(side="left")
         self.st_ffbf_var = tk.BooleanVar(value=True)
         cb = ttk.Checkbutton(r, text="brightfield", variable=self.st_ffbf_var)
         cb.pack(side="left", padx=(4, 0))
-        ToolTip(cb, "Evens the background of the brightfield (darker tile edges).\n"
-                    "The brightfield is only used to find the cells, so this cannot\n"
-                    "change any measured value - recommended.")
-        self.st_ff_var = tk.BooleanVar(value=False)
+        ToolTip(cb, "Removes darker tile edges and brightness steps between tiles\n"
+                    "in the brightfield. It is only used to find the cells, so this\n"
+                    "cannot change any measured value - recommended.")
+        self.st_ff_var = tk.BooleanVar(value=True)
         cb = ttk.Checkbutton(r, text="fluorescence", variable=self.st_ff_var)
         cb.pack(side="left", padx=(4, 0))
-        ToolTip(cb, "Removes the grid pattern of darker tile edges in the fluorescence.\n"
-                    "Changes intensities near tile edges by up to ~25 %: leave it OFF\n"
-                    "to compare with images stitched by the BZ-X software or with\n"
-                    "brightness thresholds fitted on them.")
+        ToolTip(cb, "Removes the tile pattern in the fluorescence: vignetting (darker\n"
+                    "tile edges, ~30 %), brightness steps between tiles and bleaching\n"
+                    "of spots that earlier tiles had already lit - all measured in\n"
+                    "the overlaps, so the sample itself does not bias it. The log\n"
+                    "shows the amounts per position. Makes cell brightness the same\n"
+                    "everywhere in the field. Off = as recorded (like BZ-X output).")
         self.st_overlay_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(r, text="also a colour overlay", variable=self.st_overlay_var)\
             .pack(side="left", padx=14)
@@ -2251,7 +2253,9 @@ class CargoGUI:
             self.st_out_var.set(d.get("output", ""))
             self.st_min_var.set(d.get("min_tiles", "4"))
             self.st_ov_var.set(d.get("overlap", "30"))
-            self.st_ff_var.set(bool(d.get("flat_field", False)))
+            # key renamed when the default became ON - older saved OFF values
+            # were the old default, not a choice
+            self.st_ff_var.set(bool(d.get("even_fluorescence", True)))
             self.st_ffbf_var.set(bool(d.get("flat_field_bf", True)))
             self.st_overlay_var.set(bool(d.get("overlay", False)))
         except (OSError, ValueError):
@@ -2281,15 +2285,15 @@ class CargoGUI:
             with open(self.STITCH_SETTINGS, "w", encoding="utf-8") as fh:
                 json.dump({"input": src, "output": self.st_out_var.get().strip(),
                            "min_tiles": str(mn), "overlap": f"{ov:g}",
-                           "flat_field": self.st_ff_var.get(),
+                           "even_fluorescence": self.st_ff_var.get(),
                            "flat_field_bf": self.st_ffbf_var.get(),
                            "overlay": self.st_overlay_var.get()}, fh, indent=2)
         except OSError:
             pass
         cmd = [sys.executable, "-u", os.path.join(self.script_dir, "stitch_bzx.py"), src,
                "--output", self._st_outdir(), "--min-tiles", str(mn), "--overlap", f"{ov:g}"]
-        if self.st_ff_var.get():
-            cmd.append("--flat-field")
+        if not self.st_ff_var.get():
+            cmd.append("--no-flat-field")
         if not self.st_ffbf_var.get():
             cmd.append("--no-flat-field-bf")
         if self.st_overlay_var.get():

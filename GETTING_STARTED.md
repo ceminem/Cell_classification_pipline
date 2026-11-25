@@ -107,9 +107,13 @@ Instead of the BZ-X analyser's image joining:
    a 4 × 4 snake grid is assumed from the tile numbers).
 2. Leave *Skip positions with fewer than 4 tiles* and *Tile overlap 30 %*
    unless you changed the overlap in the BZ-X software.
-3. *Correct vignetting*: **brightfield on** (only evens the background for
-   Cellpose), **fluorescence off** (keeps the intensities as the BZ-X would;
-   the thresholds were made on such images).
+3. *Even out tiles*: **brightfield and fluorescence on** (default). Removes
+   the tile grid - darker tile edges, brightness steps between tiles and
+   bleaching where tiles overlap - measured in the overlaps; the log shows
+   the amounts per position. Images stitched before this update keep their
+   grid: tick *redo positions already stitched* and stitch again. A darker
+   field from focusing in fluorescence before the recording cannot be
+   removed by stitching (focus in brightfield instead).
 4. *Stitch*. Each position takes a few seconds; green = stitched, orange =
    skipped. Skipped positions (too few or missing tiles) are listed again at
    the end under **FLAGGED** and in `stitch_report.csv`.
