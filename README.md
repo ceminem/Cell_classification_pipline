@@ -13,7 +13,8 @@ released → per-well percentages → figures with honest statistics.**
   is trained to ignore background, exposure and neighbouring cells.
 * **Cell count** for brightfield-only images: Cellpose segmentation, counts
   (incl. an unbiased counting frame for cells per mm²) and paper figures with
-  vector cell outlines (`cell_count.py`, *Cell count* tab).
+  vector cell outlines (`cell_count.py`, *Cell count* tab); the area to count
+  can be drawn on each image with the mouse (`roi_editor.py`).
 * **Collage** of figure panels (rows = samples, columns = channels) with
   calibrated scale bars and one contrast setting per column
   (`collage_gui.py`, *Collage* tab, or `Start Collage Builder.bat` alone).

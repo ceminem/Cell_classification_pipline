@@ -275,7 +275,53 @@ def upscale_labels(masks, shape):
 
 
 # =================================================================== geometry ==
-def cell_table(masks_full, px_per_um, min_area_um2, edge_mode):
+# ------------------------------------------------------------ counting area --
+ROI_FILE = "rois.json"
+ROI_COLOR = "#00E5FF"
+
+
+def load_rois(path):
+    """Counting areas drawn in the GUI: {image name: [shape, ...]}.
+
+    A shape is {"type": "rect", "x0", "y0", "x1", "y1"} or
+    {"type": "polygon", "points": [[x, y], ...]} in full-resolution image
+    pixels. An image without shapes (or not in the file) is counted whole."""
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"WARNING: could not read the counting areas {path}: {exc}")
+        return {}
+    data = data.get("images", data) if isinstance(data, dict) else {}
+    return {k: v for k, v in data.items() if isinstance(v, list) and v}
+
+
+def shape_points(sh):
+    """A shape as a closed list of (x, y) points."""
+    if sh.get("type") == "rect":
+        x0, x1 = sorted((float(sh["x0"]), float(sh["x1"])))
+        y0, y1 = sorted((float(sh["y0"]), float(sh["y1"])))
+        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    return [(float(x), float(y)) for x, y in sh.get("points", [])]
+
+
+def roi_mask(shapes, H, W):
+    """Union of the shapes as a boolean image (None = no shapes)."""
+    from PIL import Image, ImageDraw
+    polys = [shape_points(s) for s in shapes or []]
+    polys = [p for p in polys if len(p) >= 3]
+    if not polys:
+        return None
+    img = Image.new("1", (W, H), 0)
+    d = ImageDraw.Draw(img)
+    for p in polys:
+        d.polygon(p, fill=1, outline=1)
+    return np.array(img, dtype=bool)
+
+
+def cell_table(masks_full, px_per_um, min_area_um2, edge_mode, roi=None):
     """Per-cell measurements on the full-resolution mask."""
     from scipy import ndimage
     H, W = masks_full.shape
@@ -299,9 +345,22 @@ def cell_table(masks_full, px_per_um, min_area_um2, edge_mode):
         a_um = a_px * um2 if um2 else None
         too_small = bool(min_area_um2) and (
             (a_um if a_um is not None else a_px) < min_area_um2)
-        unbiased = not ("bottom" in edges or "left" in edges)
+        cx, cy = float(com[i][1]), float(com[i][0])
+        # counting area: a cell belongs to it when its centre lies inside -
+        # unbiased, because a cell cut by the border is counted on one side only
+        in_roi = True
+        if roi is not None:
+            in_roi = bool(roi[min(H - 1, max(0, int(round(cy)))),
+                              min(W - 1, max(0, int(round(cx))))])
+            unbiased = in_roi
+        else:
+            unbiased = not ("bottom" in edges or "left" in edges)
         if too_small:
             counted, why = False, "too small"
+        elif not in_roi:
+            counted, why = False, "outside counting area"
+        elif edge_mode == "unbiased" and roi is not None:
+            counted, why = True, ""          # the centre rule replaces bottom/left
         elif edge_mode == "exclude" and edges:
             counted, why = False, "touches edge"
         elif edge_mode == "unbiased" and not unbiased:
@@ -309,7 +368,6 @@ def cell_table(masks_full, px_per_um, min_area_um2, edge_mode):
         else:
             counted, why = True, ""
         eq_d = 2 * math.sqrt(a_px / math.pi)
-        cx, cy = float(com[i][1]), float(com[i][0])
         rows.append({
             "cell_number": "", "mask_label": int(lab),
             "centre_x_px": round(cx, 1), "centre_y_px": round(cy, 1),
@@ -321,6 +379,7 @@ def cell_table(masks_full, px_per_um, min_area_um2, edge_mode):
             "eq_diameter_um": round(eq_d / px_per_um, 2) if px_per_um else "",
             "touches_edge": "+".join(edges), "too_small": int(too_small),
             "unbiased_frame": int(unbiased and not too_small),
+            "in_counting_area": int(in_roi),
             "counted": int(counted), "not_counted_because": why,
         })
     number_cells(rows)
@@ -330,7 +389,8 @@ def cell_table(masks_full, px_per_um, min_area_um2, edge_mode):
 CELL_COLUMNS = ["cell_number", "mask_label", "centre_x_px", "centre_y_px",
                 "centre_x_um", "centre_y_um", "area_px", "area_um2",
                 "eq_diameter_px", "eq_diameter_um", "touches_edge", "too_small",
-                "unbiased_frame", "counted", "not_counted_because"]
+                "unbiased_frame", "in_counting_area", "counted",
+                "not_counted_because"]
 
 
 def number_cells(rows):
@@ -400,7 +460,7 @@ def nice_bar_um(width_um):
     return 5000
 
 
-def draw_figure(gray8, polys, rows, path_base, opt, filled=False):
+def draw_figure(gray8, polys, rows, path_base, opt, filled=False, shapes=None):
     """Render image + outlines with matplotlib.
 
     PNG at the image's own pixel size (1 image pixel = 1 output pixel);
@@ -445,6 +505,16 @@ def draw_figure(gray8, polys, rows, path_base, opt, filled=False):
         ax.add_collection(LineCollection([np.vstack([p, p[:1]]) for p in on],
                                          colors=color, linewidths=lw,
                                          joinstyle="round", capstyle="round"))
+        if shapes:
+            # the counting area: a dashed line with a dark halo, visible on
+            # light and dark backgrounds
+            loops = [np.vstack([p, p[:1]]) for p in
+                     (np.array(shape_points(sh)) for sh in shapes) if len(p) >= 3]
+            ax.add_collection(LineCollection(loops, colors="black",
+                                             linewidths=lw * 2.2, alpha=0.6))
+            ax.add_collection(LineCollection(loops, colors=ROI_COLOR,
+                                             linewidths=lw * 1.2,
+                                             linestyles=(0, (4, 2))))
         fs = max(6.0, W / dpi * 72 * 0.022)   # text ~2.2 % of the width
         if opt.numbers:
             # the cell numbers of the table (counted cells only)
@@ -713,6 +783,10 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true",
                     help="segment again even if a mask exists")
     ap.add_argument("--config", help="JSON settings from the GUI (Cellpose thresholds etc.)")
+    ap.add_argument("--rois", help="counting areas (JSON, drawn in the GUI). Default: "
+                                   "<output>/cell_count/rois.json when it exists")
+    ap.add_argument("--no-rois", action="store_true",
+                    help="ignore drawn counting areas, count whole images")
     opt = ap.parse_args(argv)
 
     import run_cargo_pipeline as rcp
@@ -722,7 +796,7 @@ def main(argv=None):
                 rcp.apply_settings(json.load(fh))
         except Exception as exc:
             print(f"WARNING: could not read {opt.config}: {exc}")
-    scale = float(opt.scale or rcp.CELLPOSE_SCALE_FACTOR or 1.0)
+    fixed_scale = float(opt.scale or 0) or None     # None = from the settings
 
     first = opt.inputs[0].strip().strip('"')
     out_parent = opt.output or (first if os.path.isdir(first) else os.path.dirname(first))
@@ -730,6 +804,8 @@ def main(argv=None):
     dirs = {k: os.path.join(out, k) for k in ("figures", "masks", "cells")}
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
+
+    rois = {} if opt.no_rois else load_rois(opt.rois or os.path.join(out, ROI_FILE))
 
     images = find_images(opt.inputs, skip_dirs=[out])
     if not images:
@@ -739,11 +815,18 @@ def main(argv=None):
     print(f"Images     : {len(images)}")
     print(f"Results    : {out}")
     print(f"Cellpose   : {rcp.CELLPOSE_MODEL}, cellprob {rcp.CELLPROB_THRESHOLD}, "
-          f"flow {rcp.FLOW_THRESHOLD}, downscale {scale}")
+          f"flow {rcp.FLOW_THRESHOLD}, downscale "
+          + (f"{fixed_scale:g}" if fixed_scale else
+             f"{rcp.CELLPOSE_SCALE_FACTOR} (auto = from the pixel size)"
+             if str(rcp.CELLPOSE_SCALE_FACTOR).lower() in ("auto", "0", "0.0")
+             else f"{rcp.CELLPOSE_SCALE_FACTOR}"))
     print(f"Counting   : edge = {opt.edge}"
           + (f", min area {opt.min_area_um2:g} {unit}" if opt.min_area_um2 else ""))
     print(f"Pixel size : {opt.px_per_um:g} px/um" if opt.px_per_um
           else "Pixel size : not given - no scale bar, sizes in pixels")
+    if rois:
+        print(f"Areas      : counting areas drawn for {len(rois)} image(s) "
+              "(cells whose centre lies inside; density per drawn area)")
     print()
 
     holder = {"model": None}
@@ -767,14 +850,27 @@ def main(argv=None):
             if fpx and abs(fpx - (given_px or 0)) > 1e-3:
                 print(f"    calibration from the file: {fpx:.4g} px/um"
                       + (f" (instead of {given_px:g})" if given_px else ""))
+            scale = fixed_scale or rcp.cellpose_scale(opt.px_per_um)
             raw = load_gray(path)
             gray8 = to_8bit(raw)
             H, W = gray8.shape
             mpath = os.path.join(dirs["masks"], name + "_cp_masks.tif")
             import tifffile
+            used_scale = scale
             if os.path.isfile(mpath) and not opt.force:
-                masks = tifffile.imread(mpath).astype(np.int32)
+                with tifffile.TiffFile(mpath) as tf:
+                    masks = tf.pages[0].asarray().astype(np.int32)
+                    try:
+                        used_scale = float(json.loads(
+                            tf.pages[0].description or "{}").get("cellpose_scale"))
+                    except (ValueError, TypeError, AttributeError):
+                        used_scale = None
                 print("    mask exists - reused (use --force to segment again)")
+                if used_scale is None or abs(used_scale - scale) > 1e-3:
+                    print(f"    NOTE: this mask was made at Cellpose size "
+                          f"{'unknown (older version)' if used_scale is None else f'x{used_scale:g}'}"
+                          f"; the current setting is x{scale:g}. Tick 'segment again' "
+                          "to segment with the new size.")
             else:
                 print(f"    Cellpose on {W}x{H} px (x{scale:g}) ...")
                 dev = holder.get("device_desc", "")
@@ -786,17 +882,24 @@ def main(argv=None):
             seg_scale = W / float(masks.shape[1])        # mask px -> image px
             masks_full = upscale_labels(masks, (H, W))
             if not (os.path.isfile(mpath) and not opt.force):
-                tifffile.imwrite(mpath, masks_full.astype(np.uint16), compression="zlib")
-            rows = cell_table(masks_full, opt.px_per_um, opt.min_area_um2, opt.edge)
+                tifffile.imwrite(mpath, masks_full.astype(np.uint16), compression="zlib",
+                                 description=json.dumps({"cellpose_scale": scale}))
+            shapes = rois.get(name)
+            roi = roi_mask(shapes, H, W) if shapes else None
+            if shapes and roi is None:
+                shapes = None
+            rows = cell_table(masks_full, opt.px_per_um, opt.min_area_um2, opt.edge,
+                              roi=roi)
             polys = outlines(masks, seg_scale)
             figs = draw_figure(gray8, polys, rows,
-                               os.path.join(dirs["figures"], name + "_outlines"), opt)
+                               os.path.join(dirs["figures"], name + "_outlines"), opt,
+                               shapes=shapes)
             if opt.filled:
                 o2 = argparse.Namespace(**vars(opt))
                 o2.pdf = o2.svg = False
                 figs += draw_figure(gray8, polys, rows,
                                     os.path.join(dirs["figures"], name + "_mask"), o2,
-                                    filled=True)
+                                    filled=True, shapes=shapes)
 
             with open(os.path.join(dirs["cells"], name + "_cells.csv"), "w",
                       newline="", encoding="utf-8") as fh:
@@ -812,34 +915,46 @@ def main(argv=None):
             n_count = sum(r["counted"] for r in rows)
             n_unb = sum(r["unbiased_frame"] for r in rows)
             med_a = float(np.median([r["area_px"] for r in interior])) if interior else float("nan")
-            area_mm2 = (H * W) / (opt.px_per_um ** 2) / 1e6 if opt.px_per_um else None
+            area_px = float(roi.sum()) if roi is not None else float(H * W)
+            area_mm2 = area_px / (opt.px_per_um ** 2) / 1e6 if opt.px_per_um else None
+            n_out = sum(1 for r in rows if not r["in_counting_area"])
             row = {
                 "sample": sample_of(path, root, several_roots),
                 "image": name, "file": path, "width_px": W, "height_px": H,
                 "n_objects": n_obj, "n_touching_edge": n_edge, "n_too_small": n_small,
-                "edge_rule": opt.edge, "n_counted": n_count, "n_unbiased_frame": n_unb,
+                "edge_rule": opt.edge,
+                "counting_area": (f"drawn ({len(shapes)} shape"
+                                  f"{'s' if len(shapes) > 1 else ''})"
+                                  if roi is not None else "whole image"),
+                "n_outside_area": n_out,
+                "n_counted": n_count, "n_unbiased_frame": n_unb,
                 "coverage_pct": round(100.0 * float((masks_full > 0).mean()), 1),
                 "median_area_px": round(med_a, 1) if interior else "",
                 "median_area_um2": round(med_a / opt.px_per_um ** 2, 1)
                                    if (interior and opt.px_per_um) else "",
                 "median_diameter_um": round(2 * math.sqrt(med_a / math.pi) / opt.px_per_um, 1)
                                       if (interior and opt.px_per_um) else "",
+                "counting_area_px": int(area_px),
                 "field_area_mm2": round(area_mm2, 4) if area_mm2 else "",
                 "density_per_mm2": round(n_unb / area_mm2, 1) if area_mm2 else "",
                 "px_per_um": opt.px_per_um or "",
                 "model": rcp.CELLPOSE_MODEL, "cellprob_threshold": rcp.CELLPROB_THRESHOLD,
-                "flow_threshold": rcp.FLOW_THRESHOLD, "downscale": scale,
+                "flow_threshold": rcp.FLOW_THRESHOLD,
+                "downscale": used_scale if used_scale is not None else "",
             }
             summary.append(row)
             if interior:
-                d_seg = 2 * math.sqrt(med_a / math.pi) * (masks.shape[1] / float(W))
-                if d_seg < 15:
+                d_seg = 2 * math.sqrt(med_a / math.pi) * (used_scale or
+                                                          masks.shape[1] / float(W))
+                if d_seg < 22:
                     print(f"    WARNING: cells are only ~{d_seg:.0f} px across at the "
                           "segmentation size; small cells may be missed. Use a slower "
                           "speed setting (larger size) for this magnification.")
             extra = (f", {row['density_per_mm2']} cells/mm2" if area_mm2 else "")
             print(f"    {n_count} counted  ({n_obj} objects, {n_edge} at the edge"
-                  + (f", {n_small} too small" if n_small else "") + f"){extra}"
+                  + (f", {n_small} too small" if n_small else "")
+                  + (f", {n_out} outside the drawn area" if roi is not None else "")
+                  + f"){extra}"
                   f"   [{time.time() - t0:.0f} s]")
             print("    figure: " + os.path.basename(figs[0]))
         except Exception as exc:

@@ -22,6 +22,7 @@ tkinter ships with Python, so there is nothing extra to install for the GUI.
 =============================================================================
 """
 
+import csv
 import json
 import os
 import queue
@@ -101,6 +102,15 @@ TUNABLES = [
     ("brightness_threshold", "Brightness threshold", "25.7",
      "Whole-cell mean at or above this counts as released, provided the\n"
      "CV cap above is also satisfied."),
+    ("homog_min_mean", "Homogeneity: min. mean", "15",
+     "Only for the 'homogeneity' method: whole-cell mean below this = no cargo\n"
+     "taken up (not released, however even it looks)."),
+    ("homog_cv_cap", "Homogeneity: CV cap", "0.30",
+     "Only for the 'homogeneity' method: core CV at most this = an even fill.\n"
+     "0.25 strict, 0.30 default, 0.35 lenient."),
+    ("homog_max_puncta", "Homogeneity: max. puncta", "1",
+     "Only for the 'homogeneity' method: at most this many bright dots\n"
+     "(particles still trapped) in a released cell."),
     ("cellprob_threshold", "Cellpose cellprob", "0.0",
      "MAIN KNOB FOR MISSED CELLS. Lower accepts fainter cells:\n"
      "  0.0 default,  -1.0 more cells,  -2.0 aggressive.\n"
@@ -116,8 +126,11 @@ TUNABLES = [
      "the outer rim is the PERIPHERY."),
     ("rolling_ball_radius", "Rolling ball radius (px)", "50",
      "Background subtraction radius applied to the fluorescence channel."),
-    ("cellpose_scale_factor", "Cellpose downscale", "0.5",
-     "0.5 = segment at half resolution (~4x faster). 1.0 = full resolution.\n"
+    ("cellpose_scale_factor", "Cellpose downscale", "auto",
+     "auto (recommended) = from the pixel size stored in the image, so a cell is\n"
+     "~35-40 px across for Cellpose: 0.5 for raw 20x tiles (2.64 px/um), 1.0 for\n"
+     "stitched images (1.32 px/um). At 0.5 a stitched image leaves cells ~18 px\n"
+     "across and Cellpose misses many. A number (0.25-1.0) fixes the size.\n"
      "The mask is scaled back up before measurement either way."),
     ("flow_threshold", "Cellpose flow threshold", "0.4",
      "Cellpose default is 0.4. Raise to accept more cells."),
@@ -125,6 +138,15 @@ TUNABLES = [
     # same key used to sit here; it replaced the first in tune_vars, so typing
     # into the first "Cellpose cellprob" box silently did nothing.
 ]
+
+# Classification methods offered in the Settings tab: (label, pipeline value)
+CLASSIFY_METHODS = [
+    ("brightness + core CV  (default, validated)", "brightness"),
+    ("homogeneity: even fill, few puncta  (not yet validated)", "homogeneity"),
+]
+
+# Settings that also accept a word instead of a number.
+TEXT_TUNABLES = {"cellpose_scale_factor": ("auto",)}
 
 # How much RAM the machine has -> how much heap Fiji is given (about half).
 # Offered as a dropdown because "how much RAM does this PC have" is a question
@@ -332,15 +354,38 @@ class CargoGUI:
         tbox = ttk.LabelFrame(f, text="Analysis parameters  (hover each for an explanation)")
         tbox.pack(fill="both", expand=True, padx=6, pady=6)
 
+        r = ttk.Frame(tbox)
+        r.pack(fill="x", padx=8, pady=(6, 3))
+        lb = ttk.Label(r, text="Classification method", width=26)
+        lb.pack(side="left")
+        self.method_var = tk.StringVar(value=CLASSIFY_METHODS[0][0])
+        cb = ttk.Combobox(r, textvariable=self.method_var, state="readonly", width=58,
+                          values=[m[0] for m in CLASSIFY_METHODS])
+        cb.pack(side="left")
+        tip = ("What makes a cell 'released':\n"
+               "  brightness (default, validated on 536 blind labels, 88 %):\n"
+               "      whole-cell mean >= threshold (per image, Otsu) AND core CV <= cap\n"
+               "  homogeneity (not yet validated):\n"
+               "      cargo spread evenly - core CV <= 'Homogeneity: CV cap' AND at most\n"
+               "      'max. puncta' bright dots, above a small uptake floor; brightness\n"
+               "      does not matter. Use when evenly filled but moderately bright\n"
+               "      cells are called not released.\n"
+               "The method is written into every summary (Method column).")
+        ToolTip(lb, tip)
+        ToolTip(cb, tip)
+
+        # two columns, so the list fits the window without scrolling
+        grid = ttk.Frame(tbox)
+        grid.pack(fill="x", padx=8, pady=0)
+        half = (len(TUNABLES) + 1) // 2
         self.tune_vars = {}
         for i, (key, label, default, tip) in enumerate(TUNABLES):
-            r = ttk.Frame(tbox)
-            r.pack(fill="x", padx=8, pady=3)
-            lb = ttk.Label(r, text=label, width=28)
-            lb.pack(side="left")
+            col, row = (0, i) if i < half else (2, i - half)
+            lb = ttk.Label(grid, text=label, width=26)
+            lb.grid(row=row, column=col, sticky="w", pady=3)
             var = tk.StringVar(value=default)
-            ent = ttk.Entry(r, textvariable=var, width=12)
-            ent.pack(side="left")
+            ent = ttk.Entry(grid, textvariable=var, width=10)
+            ent.grid(row=row, column=col + 1, sticky="w", padx=(0, 24), pady=3)
             self.tune_vars[key] = var
             ToolTip(lb, tip)
             ToolTip(ent, tip)
@@ -1723,7 +1768,7 @@ class CargoGUI:
         ("Counting frame: top/right edge count, bottom/left not (cells per area)", "unbiased"),
     ]
     COUNT_SPEED = [
-        ("Settings tab (Cellpose downscale)", 0.0),
+        ("Settings tab (auto: from the pixel size - recommended)", 0.0),
         ("Accurate: 1/2 size", 0.5),
         ("Faster: 1/3 size (~2x faster than 1/2)", 1 / 3.0),
         ("Fastest: 1/4 size (~4x faster than 1/2) - good on a laptop CPU", 0.25),
@@ -1800,9 +1845,10 @@ class CargoGUI:
                           values=[x[0] for x in self.COUNT_SPEED])
         cb.pack(side="left", padx=6)
         ToolTip(cb, "Cellpose's time grows with the number of pixels it looks at.\n"
-                    "Our cells are ~85 px across at full size, so 1/4 size (~21 px)\n"
-                    "still finds them. The log warns if cells get too small.\n"
-                    "With a GPU every setting takes seconds.")
+                    "'auto' keeps a cell ~35-40 px across for Cellpose: 1/2 size for\n"
+                    "raw 20x tiles (2.64 px/µm), full size for stitched images\n"
+                    "(1.32 px/µm, already binned). Below ~20 px Cellpose misses\n"
+                    "cells; the log warns. With a GPU every setting takes seconds.")
         r = ttk.Frame(b2)
         r.pack(fill="x", padx=6, pady=(0, 6))
         ttk.Label(r, text="Cells at the image edge:").pack(side="left")
@@ -1843,14 +1889,23 @@ class CargoGUI:
         self.count_btn = ttk.Button(r, text="Count cells", command=self._count_run)
         self.count_btn.pack(side="left")
         self.count_force_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(r, text="segment again (ignore saved masks)",
-                        variable=self.count_force_var).pack(side="left", padx=8)
+        cb = ttk.Checkbutton(r, text="segment again", variable=self.count_force_var)
+        cb.pack(side="left", padx=8)
+        ToolTip(cb, "Ignore the saved masks and run Cellpose again - needed after\n"
+                    "changing a Cellpose setting (cellprob, flow, downscale). The\n"
+                    "log says when a saved mask was made with another size.")
         self.count_stop_btn = ttk.Button(r, text="Stop", state="disabled",
                                          command=self._count_stop)
         self.count_stop_btn.pack(side="left")
-        ttk.Button(r, text="Open results folder", command=lambda: self._open_path(
+        ttk.Button(r, text="Results folder", command=lambda: self._open_path(
             self._count_outdir())).pack(side="left", padx=6)
-        b = ttk.Button(r, text="Plot in Figures tab  >", command=self._count_to_figures)
+        b = ttk.Button(r, text="Counting area...", command=self._count_roi)
+        b.pack(side="left", padx=(0, 6))
+        ToolTip(b, "After counting: draw the area to count on each image with the\n"
+                   "mouse (rectangle, polygon or freehand). Only cells whose centre\n"
+                   "lies inside are counted, and the density is per drawn area.\n"
+                   "'Save and recount' reuses the masks - no new segmentation.")
+        b = ttk.Button(r, text="Figures >", command=self._count_to_figures)
         b.pack(side="left")
         ToolTip(b, "Loads cell_count_summary.csv into the Figures tab: one bar per\n"
                    "image folder (mean of its images, each image a dot), with the\n"
@@ -1922,6 +1977,53 @@ class CargoGUI:
             self.plot_group_vars[i].set(g)
         self.plot_load_count(p)
 
+    def _count_roi(self):
+        """Interactive counting area on the finished count."""
+        if self.count_proc and self.count_proc.poll() is None:
+            messagebox.showinfo(APP_TITLE, "Wait until the count has finished.")
+            return
+        d = self._count_outdir()
+        if not os.path.isfile(os.path.join(d, "cell_count_summary.csv")):
+            picked = filedialog.askdirectory(
+                title="cell_count folder of a finished count",
+                initialdir=os.path.dirname(d) if os.path.isdir(os.path.dirname(d)) else None)
+            if not picked:
+                return
+            d = os.path.join(picked, "cell_count") \
+                if os.path.isdir(os.path.join(picked, "cell_count")) else picked
+        start = None
+        if self.count_figs:
+            n = os.path.basename(self.count_figs[self.count_idx])
+            if n.endswith("_outlines.png"):
+                start = n[:-len("_outlines.png")]
+        try:
+            import roi_editor
+        except ImportError as exc:
+            messagebox.showerror(APP_TITLE, f"roi_editor.py is missing: {exc}")
+            return
+        roi_editor.RoiEditor(self.root, d, start=start,
+                             on_recount=lambda path, d=d: self._count_recount(d, path))
+
+    def _count_recount(self, count_dir, roi_path):
+        """Count again with the saved masks so the drawn areas apply."""
+        if os.path.normcase(os.path.abspath(count_dir)) != \
+                os.path.normcase(os.path.abspath(self._count_outdir())):
+            # a count opened from elsewhere: point the tab at it
+            self.count_out_var.set(os.path.dirname(count_dir))
+            if not self.count_list.size():
+                for r in self._summary_files(count_dir):
+                    self.count_list.insert("end", r)
+        self._count_run(recount=True)
+
+    @staticmethod
+    def _summary_files(count_dir):
+        try:
+            with open(os.path.join(count_dir, "cell_count_summary.csv"),
+                      newline="", encoding="utf-8") as fh:
+                return [r["file"] for r in csv.DictReader(fh) if r.get("file")]
+        except (OSError, KeyError):
+            return []
+
     def _count_outdir(self):
         out = self.count_out_var.get().strip()
         items = list(self.count_list.get(0, "end"))
@@ -1962,7 +2064,7 @@ class CargoGUI:
             if k in self.count_opts:
                 self.count_opts[k].set(bool(v))
 
-    def _count_run(self):
+    def _count_run(self, recount=False):
         items = list(self.count_list.get(0, "end"))
         if not items:
             messagebox.showinfo(APP_TITLE, "Add a folder or images first (step 1).")
@@ -2022,13 +2124,15 @@ class CargoGUI:
         for k in ("numbers", "filled", "svg"):
             if o[k]:
                 cmd.append("--" + k)
-        if self.count_force_var.get():
+        if self.count_force_var.get() and not recount:
             cmd.append("--force")
 
         self._count_last_q = -1
         self.count_log.delete("1.0", "end")
-        self.count_log.insert("end", "Counting ... the first image also loads Cellpose "
-                                     "(and downloads its model once).\n\n")
+        self.count_log.insert("end", "Counting again inside the drawn areas (saved "
+                                     "masks, no new segmentation) ...\n\n" if recount else
+                              "Counting ... the first image also loads Cellpose "
+                              "(and downloads its model once).\n\n")
         self.count_btn.config(state="disabled")
         self.count_stop_btn.config(state="normal")
         self.count_status.config(text="counting...")
@@ -2500,6 +2604,8 @@ class CargoGUI:
         for key, var in self.tune_vars.items():
             cfg[key] = var.get().strip()
         cfg["use_gpu"] = self.gpu_var.get()
+        cfg["classify_method"] = dict(CLASSIFY_METHODS).get(self.method_var.get(),
+                                                            "brightness")
         # translate the RAM dropdown into the Fiji heap size
         for label, mb in RAM_PRESETS:
             if label == self.ram_var.get():
@@ -2528,6 +2634,8 @@ class CargoGUI:
             messagebox.showerror(APP_TITLE, "Tick at least one sample to run.")
             return None
         for key, var in self.tune_vars.items():
+            if key in TEXT_TUNABLES and var.get().strip().lower() in TEXT_TUNABLES[key]:
+                continue
             try:
                 float(var.get())
             except ValueError:
@@ -2880,6 +2988,7 @@ class CargoGUI:
                           ("collage_gui", "Collage tab"),
                           ("overlay_editor", "Collage: overlay of 2 images"),
                           ("scalebar_tool", "Collage: scale bar on 1 image"),
+                          ("roi_editor", "Cell count: counting area"),
                           ("matplotlib", "plotting")):
             try:
                 mod = importlib.import_module(name)
@@ -2970,6 +3079,9 @@ class CargoGUI:
             "use_gpu": self.gpu_var.get(),
             "ram": self.ram_var.get(),
             "tunables": {k: v.get() for k, v in self.tune_vars.items()},
+            "settings_rev": 2,
+            "classify_method": dict(CLASSIFY_METHODS).get(self.method_var.get(),
+                                                          "brightness"),
         }
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
@@ -2992,7 +3104,18 @@ class CargoGUI:
         self.gpu_var.set(bool(data.get("use_gpu", True)))
         if data.get("ram"):
             self.ram_var.set(data["ram"])
-        for k, v in (data.get("tunables") or {}).items():
+        for label, value in CLASSIFY_METHODS:
+            if value == data.get("classify_method"):
+                self.method_var.set(label)
+        tun = dict(data.get("tunables") or {})
+        if int(data.get("settings_rev", 1)) < 2 and \
+                str(tun.get("cellpose_scale_factor", "")).strip() in ("0.5", "0.50"):
+            # 0.5 was the old default, saved with every settings file; the new
+            # default picks the size from the pixel size (0.5 for raw tiles
+            # anyway, 1.0 for stitched images). A deliberately typed value
+            # other than 0.5 is kept.
+            tun["cellpose_scale_factor"] = "auto"
+        for k, v in tun.items():
             if k in self.tune_vars:
                 self.tune_vars[k].set(v)
         if os.path.isdir(self.parent_var.get()):
@@ -3001,6 +3124,7 @@ class CargoGUI:
     def _reset_settings(self):
         for key, _label, default, _tip in TUNABLES:
             self.tune_vars[key].set(default)
+        self.method_var.set(CLASSIFY_METHODS[0][0])
         self.gpu_var.set(True)
         messagebox.showinfo(APP_TITLE, "Analysis parameters reset to defaults.")
 

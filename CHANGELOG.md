@@ -4,7 +4,38 @@ All notable changes, newest first. "Analysis version" changes alter the numbers
 a run produces; results from different analysis versions are not comparable.
 Details and evidence: `DOCUMENTATION.md`, sections 10 and 12.
 
-## [Unreleased] — 2026-11-25
+## [Unreleased] — 2026-11-28
+
+**Analysis version 3.2.** The default classification rule is unchanged, but
+stitched images are now segmented at full size: cell numbers (and therefore
+percentages) of stitched fields change after re-segmenting.
+
+### Added
+- **Counting area in the Cell count tab** (`roi_editor.py`): after counting,
+  draw the area to count with the mouse - rectangle, polygon or freehand
+  lasso, several shapes per image, zoom and pan, live count / area / density
+  while drawing, "use on all images". *Save and recount* reuses the masks
+  (seconds). A cell is counted when its centre lies inside (unbiased);
+  density is per drawn area; the area is drawn on every figure. Saved in
+  `cell_count/rois.json`; `cell_count.py --rois / --no-rois`. New columns
+  `counting_area`, `n_outside_area`, `counting_area_px`, `in_counting_area`.
+- **Classification method "homogeneity"** (Settings tab, optional, not yet
+  validated): released = even fill (core CV <= 0.30) and at most 1 punctum,
+  above an uptake floor of 15 - independent of brightness. On pre_glucose
+  XY03: 193 / 510 released vs 92 with brightness. Settings
+  `HOMOG_MIN_MEAN`, `HOMOG_CV_CAP`, `HOMOG_MAX_PUNCTA`.
+
+### Changed
+- **Cellpose size "auto"** (new default of *Cellpose downscale*): chosen from
+  the calibration in the image so cells are ~35-40 px across for Cellpose -
+  0.5 for raw 20x tiles (as before), 1.0 for stitched images (1.32 px/um),
+  where 0.5 left cells ~18 px across and parts of XY03 almost unsegmented.
+  Saved GUI settings with the old default 0.5 switch to auto once. Masks now
+  record the size they were made at; the cell count warns when a reused mask
+  differs, and below 22 px per cell (was 15).
+- Settings tab in two columns; shorter button labels on the Cell count tab.
+
+## 2026-11-25
 
 Analysis version unchanged (3.1): rule results are identical to before.
 

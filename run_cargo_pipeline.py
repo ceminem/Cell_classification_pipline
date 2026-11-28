@@ -79,7 +79,31 @@ CELLPROB_THRESHOLD  = 0.0
 # working range, and the smallest cells are ~30 px. Full resolution therefore
 # costs about 4x the time for little expected gain. Set to 1.0 if small or
 # faint cells are still being missed after adjusting CELLPROB_THRESHOLD.
-CELLPOSE_SCALE_FACTOR = 0.5
+CELLPOSE_SCALE_FACTOR = "auto"
+
+# "auto" picks the working size from the image calibration so that a cell is
+# about the same number of pixels across whatever the source:
+#     raw 20x tiles, 2.64 px/um  -> 0.5  (what was validated, cells ~37 px)
+#     stitched (2x2 binned) 1.32 -> 1.0  (0.5 left cells only ~18 px across,
+#                                         and Cellpose missed many of them)
+# Images without a calibration in the file keep 0.5. A number (0.25-1.0)
+# fixes the size instead.
+AUTO_SCALE_PX_PER_UM = 1.32
+
+
+def cellpose_scale(px_per_um=0.0, value=None):
+    """The Cellpose working size (fraction of the image size) for an image of
+    this calibration, from CELLPOSE_SCALE_FACTOR ("auto" or 0 = automatic)."""
+    v = CELLPOSE_SCALE_FACTOR if value is None else value
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        f = 0.0
+    if f > 0:
+        return f
+    if px_per_um and px_per_um > 0:
+        return round(min(1.0, AUTO_SCALE_PX_PER_UM / float(px_per_um)), 2)
+    return 0.5
 
 USE_GPU             = True    # falls back to CPU automatically if unavailable
 # NOTE: CPSAM is largely scale-invariant; unlike cyto3 it does not need a
@@ -95,6 +119,13 @@ USE_GPU             = True    # falls back to CPU automatically if unavailable
 # threshold, 95% with a per-sample threshold. "texture" selects the old
 # fill-ratio/CV rule and is kept only so the two can be compared.
 CLASSIFY_METHOD = "brightness"
+
+# "homogeneity" calls a cell released when its cargo is spread evenly (low
+# CoreCV) without bright dots (few puncta), above a small uptake floor -
+# independent of how bright the cell is. Not validated on blind labels yet.
+HOMOG_MIN_MEAN = 15.0     # whole-cell mean below this = no cargo taken up
+HOMOG_CV_CAP = 0.30       # core CV at most this = even fill
+HOMOG_MAX_PUNCTA = 1      # at most this many bright dots
 
 # Global fallback threshold, fitted to the hand labels.
 BRIGHTNESS_THRESHOLD = 25.7
@@ -332,11 +363,21 @@ def load_brightfield(bf_path):
     arr = arr.astype(np.uint8)
 
     # --- optional downscale for speed ---
-    if CELLPOSE_SCALE_FACTOR != 1.0:
+    try:
+        from cell_count import file_px_per_um
+        px_um = file_px_per_um(bf_path)
+    except Exception:
+        px_um = 0.0
+    scale = cellpose_scale(px_um)
+    print(f"    Cellpose working size x{scale:g}"
+          + (f" (auto from {px_um:.4g} px/um)" if px_um and
+             str(CELLPOSE_SCALE_FACTOR).strip().lower() in ("auto", "0", "0.0", "")
+             else ""))
+    if scale != 1.0:
         from PIL import Image
         img = Image.fromarray(arr)
-        new_size = (max(1, int(round(img.width * CELLPOSE_SCALE_FACTOR))),
-                    max(1, int(round(img.height * CELLPOSE_SCALE_FACTOR))))
+        new_size = (max(1, int(round(img.width * scale))),
+                    max(1, int(round(img.height * scale))))
         arr = np.array(img.resize(new_size, Image.BILINEAR))
 
     print(f"    brightfield {raw_shape} -> 2D -> {arr.shape} (std {arr.std():.1f})")
@@ -1113,6 +1154,9 @@ def main():
                         "method": CLASSIFY_METHOD,
                         "brightness_threshold": BRIGHTNESS_THRESHOLD,
                         "core_cv_cap": CORE_CV_CAP,
+                        "homog_min_mean": HOMOG_MIN_MEAN,
+                        "homog_cv_cap": HOMOG_CV_CAP,
+                        "homog_max_puncta": HOMOG_MAX_PUNCTA,
                         "saturation_guard": SATURATION_GUARD,
                         "auto_threshold": AUTO_THRESHOLD,
                         "min_cell_mean": MIN_CELL_MEAN,

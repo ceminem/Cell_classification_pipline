@@ -182,10 +182,19 @@ Notation: `I(p)` is the intensity of pixel `p`; a cell `C` is a set of pixels;
    ```
    Percentiles, not min/max, so a few hot or dead pixels cannot dictate the
    range.
-3. **Downscale** by `CELLPOSE_SCALE_FACTOR` (default 0.5, bilinear). Cells are
-   ~85 px across at full resolution, so ~43 px at 0.5×, well inside Cellpose's
-   working range; segmentation time scales with pixel count, so this is ~4×
-   faster.
+3. **Downscale** by `CELLPOSE_SCALE_FACTOR` (bilinear). Default `"auto"` (v3.2):
+   the factor comes from the calibration stored in the brightfield file, so a
+   cell is ~35–40 px across for Cellpose whatever the source:
+   ```
+   scale = round( min(1, 1.32 / px_per_um), 2 )      (no calibration in the file → 0.5)
+   raw 20× tile      2.64 px/µm → 0.5   (cells ~74 px → ~37 px; the validated setting)
+   stitched, binned  1.32 px/µm → 1.0   (cells ~37 px; 0.5 left them ~18 px)
+   ```
+   *Why:* stitched images are already 2×2 binned. At the old fixed 0.5 a
+   stitched field (pre_glucose XY03) gave Cellpose cells only ~18 px across,
+   and whole regions of the field came back nearly empty. A number in the
+   setting (0.25–1.0) fixes the factor instead. Segmentation time scales with
+   the pixel count, so 0.5 is ~4× faster than 1.0.
 4. **Contrast check:** if the standard deviation of `I8` is < 3 the image is
    nearly flat and Cellpose will probably find nothing; a warning is printed.
 
@@ -305,6 +314,27 @@ In words: **a cell has released if it is bright enough AND evenly filled.**
 global value 25.7 is used only when the image has too few cells for Otsu, or
 when `AUTO_THRESHOLD = False`. The threshold actually used is written into every
 summary CSV and log.
+
+**Method `"homogeneity"`** (v3.2, optional, *not yet validated on blind labels*):
+
+```
+if MeanWhole < MIN_CELL_MEAN                     -> excluded_negative
+if MeanWhole < HOMOG_MIN_MEAN (15)               -> not_released    (no cargo taken up)
+if CoreCV > HOMOG_CV_CAP (0.30)                  -> not_released    (uneven fill)
+if PunctaCount > HOMOG_MAX_PUNCTA (1)            -> not_released    (bright dots = trapped particles)
+otherwise                                        -> released
+```
+
+In words: **released = the cargo is spread evenly, without dots — however
+bright the cell is.** The brightness rule asks "how much signal"; this one asks
+"what does the signal look like". *Why it exists:* in pre_glucose XY03, 161
+cells were evenly filled (CoreCV ≤ 0.25, ≤ 1 punctum) but only 78 of them
+passed the per-image Otsu threshold (91.4), because Otsu on a bright image puts
+the bar high. On that field brightness calls 92 / 510 cells released (18 %),
+homogeneity 193 (38 %); 82 cells are released under both. Which one matches a
+human must be measured: label one field blind with the curator, then compare
+both rules with `cargo_compare.py` (section 5) before using it for a paper.
+The method is written into every summary (`Method` column) and the log.
 
 Other methods, kept for comparison only:
 
@@ -888,6 +918,7 @@ studies of 13.07.2026 and 17.07.2026.
 | **2.1** | `MeanWhole ≥ T` | 195 hand labels, 4 samples: MeanWhole AUC 0.917; CoreFillRatio 0.451; CoreCV 0.453 (chance) | ~87 % global T; ~95 % per-sample T |
 | **3.0** | + per-image Otsu threshold, recorded in every summary; saturation veto available | best T ranged 14.2–53.3 across samples; 6 of 50 bright false positives were blob bleed-over | |
 | **3.1** | `MeanWhole ≥ T AND CoreCV ≤ 0.65` | 536 **blind** labels: CoreCV AUC 0.074 (= 0.926 inverted) | **88 %** (brightness alone 80 %) |
+| **3.2** | default rule unchanged; Cellpose size `auto` from the calibration (1.0 for stitched images); optional `homogeneity` method | XY03: right sixth of a stitched field nearly unsegmented at 0.5 | homogeneity: to be measured |
 | CNN 1.0 | learned from pixels | leave-one-field-out vs the rule | to be measured on real labels |
 
 Why CV went from useless (2.1) to useful (3.1): the first 195 labels were made
@@ -947,7 +978,10 @@ them through `_gui_config.json` (`apply_settings`). Your current values
 
 | setting | default | effect | needs |
 |---|---|---|---|
-| `CLASSIFY_METHOD` | `brightness` | rule (4.7); `texture`, `nuclear` for comparison | re-classify |
+| `CLASSIFY_METHOD` | `brightness` | rule (4.7); `homogeneity` (Settings tab); `texture`, `nuclear` for comparison | re-classify |
+| `HOMOG_MIN_MEAN` | 15 | `homogeneity` only: uptake floor | re-classify |
+| `HOMOG_CV_CAP` | 0.30 | `homogeneity` only: CoreCV at most this = even fill | re-classify |
+| `HOMOG_MAX_PUNCTA` | 1 | `homogeneity` only: at most this many puncta | re-classify |
 | `BRIGHTNESS_THRESHOLD` | 25.7 | global fallback T | re-classify |
 | `AUTO_THRESHOLD` | `True` | per-image Otsu T (4.8). *Not shown in the GUI* — always on from the GUI | re-classify |
 | `CORE_CV_CAP` | 0.65 | released requires CoreCV ≤ this; 2.0 effectively disables | re-classify |
@@ -961,7 +995,7 @@ them through `_gui_config.json` (`apply_settings`). Your current values
 | `CELLPOSE_MODEL` | `cpsam` | | **re-segment** |
 | `CELLPROB_THRESHOLD` | 0.0 | lower = more/fainter cells | **re-segment** (`--force`) |
 | `FLOW_THRESHOLD` | 0.4 | higher = more irregular masks accepted | **re-segment** |
-| `CELLPOSE_SCALE_FACTOR` | 0.5 | segmentation resolution | **re-segment** |
+| `CELLPOSE_SCALE_FACTOR` | `auto` | segmentation resolution; `auto` = from the pixel size (4.1), or a number | **re-segment** |
 | `USE_GPU` | `True` | falls back to CPU | — |
 | `USE_FIJI` | `False` | legacy ImageJ backend | — |
 | `FIJI_MEMORY_MB` | 12288 | legacy only; capped at ½ RAM | — |
@@ -1161,6 +1195,7 @@ unusable. Data stays on the lab drive; the run record links data and code.
 | `scalebar_tool.py` | scale bar burned onto a single image |
 | `fiji_merge.py` | optional: the overlay through Fiji's Merge Channels |
 | `cell_count.py` | brightfield-only cell counting, figures, Excel; CLI |
+| `roi_editor.py` | draw the counting area (rectangle / polygon / freehand) on counted images; writes `cell_count/rois.json` |
 | `run_cargo_pipeline.py` | orchestrator: channel search, brightfield prep, Cellpose, measurement, batch summary, run record; CLI |
 | `cargo_measure.py` | per-cell measurement, classification rule, Otsu, CSV and overlay writing |
 | `cargo_plot.py` | figures and statistics |
@@ -1228,11 +1263,14 @@ file name already contains (`A1/A1_brightfield.tif` → `A1_brightfield`).
 **Segmentation.** The image is reduced to one 2D plane (RGB averaged, stacks
 max-projected), stretched to 8 bit between the 0.5th and 99.5th percentile,
 downscaled (*Speed* in the tab, `--scale`; default *Cellpose downscale*
-from the Settings tab) and segmented by the release pipeline's
+from the Settings tab, `auto` = from the pixel size as in 4.1: 0.5 for raw
+20× tiles, 1.0 for stitched images) and segmented by the release pipeline's
 own `run_cellpose`: same model (cpsam), flow / cellprob thresholds, GPU or
 CPU, and the same automatic retry at cellprob −2 when nothing is found. The
 label mask is enlarged back to the image size (nearest neighbour) and saved
-as a 16-bit TIFF. An existing mask is reused unless *segment again* is ticked.
+as a 16-bit TIFF that records the Cellpose size it was made at. An existing
+mask is reused unless *segment again* is ticked; the log notes when a reused
+mask was made at another size than the current setting.
 
 **Measurements per cell** (full-resolution pixels): area A, equivalent
 diameter d = 2√(A/π), centroid, edge contact. With a calibration *p* px/µm:
@@ -1260,6 +1298,30 @@ counting two adjacent edges and excluding the other two gives the expected
 count of the field area without bias. Density is therefore always
 n_unbiased / field area (mm²), whatever rule is chosen for *n_counted*.
 Objects below the minimum area (debris) are never counted.
+
+**Counting area** (*Counting area…* on the Cell count tab, `roi_editor.py`).
+After a count, the area to count can be drawn on each image with the mouse:
+*Rectangle* (drag), *Polygon* (click the corners, double-click or Enter to
+close) or *Freehand* (trace a lasso). Several shapes on one image form one
+area (their union). Mouse wheel zooms, right or middle button moves the view,
+*Undo last* / *Clear image* remove shapes, *Use on all images* copies the area
+to every image of the same size. The number of cells in the area, its size
+and the density are shown live while drawing. *Save and recount* writes
+`cell_count/rois.json` (shapes in full-resolution pixels) and counts again
+with the saved masks — no new segmentation, so it takes seconds.
+
+Rule: a cell belongs to the area when its **centroid** lies inside. Like the
+counting frame above this is unbiased — a cell cut by the border of the area
+is counted on exactly one side — so the density is n_in_area / drawn area
+(mm², the rasterised union of the shapes). With a drawn area the *unbiased*
+edge rule is replaced by the centroid rule; *exclude* still drops cells that
+touch the image border; debris stays excluded. Cells outside are drawn dimmed
+and dashed (reason `outside counting area` in the cell table, column
+`in_counting_area`), the area itself as a dashed cyan line on all figures.
+The summary gains `counting_area` (`whole image` or `drawn (n shapes)`),
+`n_outside_area` and `counting_area_px`; `field_area_mm2` and
+`density_per_mm2` then refer to the drawn area. Images without shapes are
+counted whole. `--rois FILE` uses another file, `--no-rois` ignores it.
 
 **Figures.** Outlines are traced per cell (OpenCV `findContours`) through the
 centres of its boundary pixels, so they lie just inside the cell and
@@ -1295,7 +1357,7 @@ fields of one well are technical replicates, not independent samples.
 Files `figures/cell_count_bar_chart.png/.pdf`, `cell_density_bar_chart…`.
 
 **Figures tab.** `cell_count_summary.csv` can be loaded in the Figures tab
-(*Add summary CSV…*, or *Plot in Figures tab* on the Cell count tab). Each
+(*Add summary CSV…*, or *Figures >* on the Cell count tab). Each
 image is one value; the bars default to one per image folder (the `sample`
 column), so the images of a folder are its (technical) replicates. Values:
 cells counted per image, cells per mm² (counting frame), cells in the counting
@@ -1314,8 +1376,9 @@ area/diameter, field area, density, Cellpose settings), `cells/*_cells.csv`
 **Speed.** Cellpose-SAM (the only model of Cellpose 4) is a large vision
 transformer; its time grows with the number of pixels it sees. At ½ size a
 6000 × 4500 px field is 6.7 megapixels, at ¼ size 1.7 (about 4× faster).
-Cells of ~85 px at full size are ~21 px at ¼ size, still well segmentable;
-the log warns when the median cell is below 15 px at the chosen size. On a
+Below ~20 px across Cellpose starts to miss cells (stitched XY03 at ½ size,
+~18 px, left regions of the field nearly empty); the log warns when the median
+cell is below 22 px at the chosen size, and `auto` avoids it. On a
 GPU every setting takes seconds; on a laptop CPU, minutes per image. On the
 CPU the network runs in float32 unless the processor computes bfloat16
 natively (Cellpose's bfloat16 default is emulated, ~10x slower, on most

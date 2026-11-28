@@ -134,13 +134,15 @@ For images that have only brightfield (no fluorescence):
    `1.3247` for BZ-X images with 2 × 2 binning (the usual stitched images).
    Images from the *Stitching* tab carry their calibration; it is used
    automatically.
-3. *Speed*: on a laptop without GPU choose **Fastest: 1/4 size** (minutes
-   instead of most of an hour per image); check the outlines once.
+3. *Speed*: leave it on **Settings tab (auto)**: it picks the size from the
+   pixel size (half size for raw tiles, full size for stitched images, so
+   cells stay large enough for Cellpose). On a laptop without GPU *Fastest:
+   1/4 size* is quicker for raw tiles; check the outlines once.
 4. *Cells at the image edge*: *Count every cell* for the number in the
    field; *Counting frame* for cells per mm² (unbiased).
 5. *Count cells*. The preview on the right shows each figure; check that the
    outlines fit before using the numbers.
-6. *Open results folder* → `cell_count`:
+6. *Results folder* → `cell_count`:
    **`cell_count.xlsx`** (Summary, Samples with bar chart, one sheet per image
    with every cell: number, position, size), `figures/` (PNG and PDF for the
    paper; the PDF outlines are vector lines; with several images also
@@ -149,7 +151,16 @@ For images that have only brightfield (no fluorescence):
    condition name) under one parent folder and add the parent folder: one bar
    per sample folder.
 
-7. *Plot in Figures tab >* loads `cell_count_summary.csv` into the **Figures**
+7. **Count only part of an image:** *Counting area…* opens the result.
+   Choose *Rectangle*, *Polygon* or *Freehand* and draw the area with the
+   left mouse button (polygon: click the corners, double-click to close;
+   several shapes are joined). Mouse wheel = zoom, right button = move. The
+   count inside the area updates while you draw. *Save and recount* counts
+   again inside the areas in a few seconds (the masks are reused); the
+   figures show the area as a dashed cyan line and the density is per drawn
+   area. *Clear image* + *Save and recount* goes back to the whole image.
+
+8. *Figures >* loads `cell_count_summary.csv` into the **Figures**
    tab: one bar per image folder (mean of its images, every image a dot),
    with the palettes, statistics and PNG/PDF/SVG export there. *Value* switches
    between cells per image, cells per mm², area covered, cell area and

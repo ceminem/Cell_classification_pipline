@@ -166,6 +166,31 @@ def classify_row(row, cfg):
             return "released"
         return "not_released"
 
+    if method == "homogeneity":
+        # Released = the cargo is spread EVENLY through the cell, however bright.
+        #
+        # Brightness asks "how much signal"; this asks "what does the signal
+        # look like": a smooth fill (low CoreCV) without bright dots (puncta =
+        # particles still trapped in endosomes). A small uptake floor keeps
+        # cells with no cargo at all - whose noise can also look "even" - out.
+        #
+        # Why it exists: in pre_glucose XY03 161 cells were evenly filled
+        # (CoreCV <= 0.25, at most 1 punctum) but only 78 of them passed the
+        # per-image brightness threshold (91), because Otsu on a bright image
+        # sets the bar high. NOT validated against blind labels yet - check it
+        # with the curator / cargo_compare before using it for a paper.
+        if row["MeanWhole"] < cfg.get("homog_min_mean", 15.0):
+            return "not_released"
+        cv = row.get("CoreCV", np.nan)
+        if not np.isfinite(cv) or cv > cfg.get("homog_cv_cap", 0.30):
+            return "not_released"
+        if row.get("PunctaCount", 0) > cfg.get("homog_max_puncta", 1):
+            return "not_released"
+        guard = cfg.get("saturation_guard", 0.0)
+        if guard > 0 and row.get("SatFraction", 0.0) >= guard:
+            return "excluded_saturated"
+        return "released"
+
     if method == "brightness":
         # Brightness AND texture, both required.
         #
@@ -950,7 +975,9 @@ def run_sample(fluor_path, mask_path, out_dir, base, cfg,
         else:
             log("auto threshold: too few cells, keeping the global value")
 
-    used_threshold = cfg.get("brightness_threshold")
+    used_threshold = (cfg.get("homog_min_mean", 15.0)
+                      if cfg.get("method") == "homogeneity"
+                      else cfg.get("brightness_threshold"))
     log(f"classified on {cfg.get('method','brightness')}, "
         f"threshold {used_threshold:.2f}")
 
@@ -968,7 +995,12 @@ def run_sample(fluor_path, mask_path, out_dir, base, cfg,
                 "blobs can bleed over neighbouring cells; consider excluding it.")
     log(_percentile_line("CoreFillRatio percentiles", fills))
     log(_percentile_line("CoreCV percentiles", cvs))
-    if cfg.get("method", "brightness") == "brightness":
+    if cfg.get("method") == "homogeneity":
+        log(f"rule used (homogeneity): released = MeanWhole >= "
+            f"{cfg.get('homog_min_mean', 15.0):g} AND CoreCV <= "
+            f"{cfg.get('homog_cv_cap', 0.30):g} AND PunctaCount <= "
+            f"{cfg.get('homog_max_puncta', 1):g}")
+    elif cfg.get("method", "brightness") == "brightness":
         cap = cfg.get("core_cv_cap")
         log(f"rule used: released = MeanWhole >= {used_threshold:.2f}"
             + (f" AND CoreCV <= {cap}" if cap is not None else ""))

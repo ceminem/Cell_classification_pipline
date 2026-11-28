@@ -43,7 +43,7 @@ from datetime import datetime
 # Bump ANALYSIS_VERSION whenever a change alters the numbers a run produces.
 # The history below is the record of why results differ between versions.
 # ---------------------------------------------------------------------------
-ANALYSIS_VERSION = "3.1"
+ANALYSIS_VERSION = "3.2"
 
 VERSION_HISTORY = [
     ("1.0", "Fill-ratio + core CV thresholds (ImageJ macro). Agreed with blind "
@@ -60,6 +60,12 @@ VERSION_HISTORY = [
             "brightness>=25.7 AND CV<=0.65 gives 88% vs 80% for brightness "
             "alone. Nuclear/puncta/radial features added but not yet used for "
             "classification."),
+    ("3.2", "Cellpose working size chosen from the image calibration by default "
+            "('auto'): unchanged 0.5 for raw 20x tiles, 1.0 for stitched "
+            "(binned, 1.32 px/um) images, where 0.5 left cells ~18 px across "
+            "and many were missed. Optional 'homogeneity' classification "
+            "(even fill + few puncta, independent of brightness); brightness "
+            "stays the default."),
 ]
 
 # Settings that change the numbers. Anything not in this list is cosmetic.
@@ -69,7 +75,8 @@ TRACKED_SETTINGS = [
     "SATURATION_GUARD", "FILL_RATIO_THRESHOLD", "CORE_CV_THRESHOLD",
     "VERY_HIGH_SIGNAL_CUTOFF_8BIT",
     "CELLPOSE_MODEL", "FLOW_THRESHOLD", "CELLPROB_THRESHOLD",
-    "CELLPOSE_SCALE_FACTOR",
+    "CELLPOSE_SCALE_FACTOR", "AUTO_SCALE_PX_PER_UM",
+    "HOMOG_MIN_MEAN", "HOMOG_CV_CAP", "HOMOG_MAX_PUNCTA",
 ]
 
 
